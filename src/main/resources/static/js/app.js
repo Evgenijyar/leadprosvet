@@ -1,17 +1,19 @@
 const state = {
   fields: [],
-  provider: 'openai'
+  provider: 'openai',
+  drag: null
 };
 
 const defaultPromptHtml = `
 <p>Собери краткую справку о компании для первого звонка менеджера.</p>
 <p>Данные из Bitrix24:</p>
-<p>Компания: <span class="prompt-token" draggable="true" contenteditable="false" data-field-id="COMPANY_TITLE" data-field-label="Компания">Компания</span></p>
-<p>Сайт: <span class="prompt-token" draggable="true" contenteditable="false" data-field-id="WEB" data-field-label="Сайт">Сайт</span></p>
-<p>ИНН: <span class="prompt-token" draggable="true" contenteditable="false" data-field-id="UF_CRM_INN" data-field-label="ИНН">ИНН</span></p>
-<p>Нужно найти и структурировать: чем занимается компания, ключевые продукты/услуги, размер/география если доступно, что важно знать перед первым звонком, возможные боли и первый заход для разговора.</p>`;
+<p>Компания: ${tokenHtml({ id: 'COMPANY_TITLE', label: 'Компания' })}</p>
+<p>Сайт: ${tokenHtml({ id: 'WEB', label: 'Сайт' })}</p>
+<p>ИНН: ${tokenHtml({ id: 'UF_CRM_INN', label: 'ИНН' })}</p>
+<p>Нужно найти и структурировать: чем занимается компания, ключевые продукты/услуги, размер и география, если доступно, что важно знать перед первым звонком, возможные боли и первый заход для разговора.</p>`;
 
 document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('promptEditor').innerHTML = defaultPromptHtml;
   bindTabs();
   bindProviderSwitch();
   bindProxySwitch();
@@ -63,31 +65,25 @@ function bindProxySwitch() {
 
 function bindPromptEditor() {
   const editor = document.getElementById('promptEditor');
-  editor.addEventListener('dragover', event => {
-    event.preventDefault();
-    editor.classList.add('drag-over');
+
+  editor.addEventListener('pointerup', event => {
+    if (!event.target.closest('.token-remove')) {
+      updateSerializedPrompt();
+    }
   });
-  editor.addEventListener('dragleave', () => editor.classList.remove('drag-over'));
-  editor.addEventListener('drop', event => {
-    event.preventDefault();
-    editor.classList.remove('drag-over');
-    const raw = event.dataTransfer.getData('application/json') || event.dataTransfer.getData('text/plain');
-    const field = parseDraggedField(raw);
-    if (!field) return;
-    placeCaretFromPoint(event.clientX, event.clientY);
-    insertPromptToken(field);
-    updateSerializedPrompt();
-  });
-  editor.addEventListener('input', updateSerializedPrompt);
+
   editor.addEventListener('keyup', updateSerializedPrompt);
-  editor.addEventListener('mouseup', updateSerializedPrompt);
-  editor.addEventListener('dragstart', event => {
-    const token = event.target.closest('.prompt-token');
+  editor.addEventListener('input', updateSerializedPrompt);
+
+  editor.addEventListener('click', event => {
+    const remove = event.target.closest('.token-remove');
+    if (!remove) return;
+    event.preventDefault();
+    const token = remove.closest('.prompt-token');
     if (!token) return;
-    event.dataTransfer.setData('application/json', JSON.stringify({
-      id: token.dataset.fieldId,
-      label: token.dataset.fieldLabel
-    }));
+    token.remove();
+    renderFields();
+    updateSerializedPrompt();
   });
 }
 
@@ -96,10 +92,15 @@ function bindButtons() {
   document.getElementById('fieldSearch').addEventListener('input', renderFields);
   document.getElementById('resetPromptBtn').addEventListener('click', () => {
     document.getElementById('promptEditor').innerHTML = defaultPromptHtml;
+    renderFields();
     updateSerializedPrompt();
   });
   document.getElementById('saveIntegrationBtn').addEventListener('click', () => saveSettings('integration'));
   document.getElementById('saveLlmBtn').addEventListener('click', () => saveSettings('llm'));
+
+  document.addEventListener('pointermove', onPointerMove);
+  document.addEventListener('pointerup', onPointerUp);
+  document.addEventListener('pointercancel', cancelDrag);
 }
 
 async function loadFields() {
@@ -115,37 +116,106 @@ async function loadFields() {
 function renderFields() {
   const query = document.getElementById('fieldSearch').value.trim().toLowerCase();
   const list = document.getElementById('fieldList');
+  const used = usedFieldIds();
   list.innerHTML = '';
+
   state.fields
+    .filter(field => !used.has(field.id))
     .filter(field => !query || `${field.id} ${field.label} ${field.group}`.toLowerCase().includes(query))
     .forEach(field => {
       const chip = document.createElement('div');
       chip.className = 'field-chip';
-      chip.draggable = true;
       chip.dataset.fieldId = field.id;
       chip.dataset.fieldLabel = field.label;
-      chip.innerHTML = `<span>${escapeHtml(field.label)}</span><small>${escapeHtml(field.id)}</small>`;
-      chip.addEventListener('dragstart', event => {
-        event.dataTransfer.setData('application/json', JSON.stringify(field));
-        event.dataTransfer.effectAllowed = 'copy';
-      });
-      chip.addEventListener('click', () => {
+      chip.innerHTML = chipInnerHtml(field);
+      chip.addEventListener('pointerdown', event => startChipDrag(event, field, chip));
+      chip.addEventListener('click', event => {
+        if (state.drag?.moved) return;
+        event.preventDefault();
         document.getElementById('promptEditor').focus();
         insertPromptToken(field);
+        renderFields();
         updateSerializedPrompt();
       });
       list.appendChild(chip);
     });
 }
 
-function parseDraggedField(raw) {
-  if (!raw) return null;
-  try {
-    const field = JSON.parse(raw);
-    return field.id && field.label ? field : null;
-  } catch {
-    return null;
+function startChipDrag(event, field, sourceChip) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+
+  const clone = document.getElementById('dragClone');
+  clone.innerHTML = chipInnerHtml(field);
+  clone.classList.add('active');
+
+  state.drag = {
+    field,
+    sourceChip,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false
+  };
+
+  sourceChip.classList.add('drag-source');
+  sourceChip.setPointerCapture?.(event.pointerId);
+  moveDragClone(event.clientX, event.clientY);
+}
+
+function onPointerMove(event) {
+  if (!state.drag) return;
+  const dx = Math.abs(event.clientX - state.drag.startX);
+  const dy = Math.abs(event.clientY - state.drag.startY);
+  if (dx > 3 || dy > 3) state.drag.moved = true;
+
+  moveDragClone(event.clientX, event.clientY);
+
+  const editor = document.getElementById('promptEditor');
+  const underPointer = document.elementFromPoint(event.clientX, event.clientY);
+  editor.classList.toggle('drag-over', Boolean(underPointer && editor.contains(underPointer)));
+}
+
+function onPointerUp(event) {
+  if (!state.drag) return;
+
+  const drag = state.drag;
+  const editor = document.getElementById('promptEditor');
+  const underPointer = document.elementFromPoint(event.clientX, event.clientY);
+  const droppedIntoEditor = Boolean(underPointer && editor.contains(underPointer));
+
+  if (droppedIntoEditor && drag.moved) {
+    editor.focus();
+    placeCaretFromPoint(event.clientX, event.clientY);
+    insertPromptToken(drag.field);
+    renderFields();
+    updateSerializedPrompt();
   }
+
+  cancelDrag();
+}
+
+function cancelDrag() {
+  const editor = document.getElementById('promptEditor');
+  editor?.classList.remove('drag-over');
+
+  const clone = document.getElementById('dragClone');
+  if (clone) {
+    clone.classList.remove('active');
+    clone.style.transform = 'translate3d(-9999px, -9999px, 0)';
+    clone.innerHTML = '';
+  }
+
+  if (state.drag?.sourceChip) {
+    state.drag.sourceChip.classList.remove('drag-source');
+  }
+
+  state.drag = null;
+}
+
+function moveDragClone(x, y) {
+  const clone = document.getElementById('dragClone');
+  clone.style.transform = `translate3d(${x + 12}px, ${y + 12}px, 0)`;
 }
 
 function placeCaretFromPoint(x, y) {
@@ -158,26 +228,44 @@ function placeCaretFromPoint(x, y) {
     range.setStart(pos.offsetNode, pos.offset);
   }
   if (!range) return;
+
+  const token = range.startContainer?.parentElement?.closest?.('.prompt-token');
+  if (token) range.setStartAfter(token);
+
   const selection = window.getSelection();
   selection.removeAllRanges();
   selection.addRange(range);
 }
 
 function insertPromptToken(field) {
-  const selection = window.getSelection();
-  if (!selection.rangeCount) {
-    document.getElementById('promptEditor').focus();
+  if (usedFieldIds().has(field.id)) {
+    showToast(`Поле «${field.label}» уже добавлено в промпт`);
+    return;
   }
-  const range = selection.rangeCount ? selection.getRangeAt(0) : document.createRange();
-  const token = document.createElement('span');
-  token.className = 'prompt-token';
-  token.draggable = true;
-  token.contentEditable = 'false';
-  token.dataset.fieldId = field.id;
-  token.dataset.fieldLabel = field.label;
-  token.textContent = field.label;
 
+  const editor = document.getElementById('promptEditor');
+  editor.focus();
+
+  const selection = window.getSelection();
+  let range;
+  if (selection.rangeCount) {
+    range = selection.getRangeAt(0);
+  } else {
+    range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+
+  if (!editor.contains(range.commonAncestorContainer)) {
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+
+  const temp = document.createElement('span');
+  temp.innerHTML = tokenHtml(field);
+  const token = temp.firstElementChild;
   const space = document.createTextNode(' ');
+
   range.deleteContents();
   range.insertNode(space);
   range.insertNode(token);
@@ -185,6 +273,22 @@ function insertPromptToken(field) {
   range.setEndAfter(space);
   selection.removeAllRanges();
   selection.addRange(range);
+}
+
+function usedFieldIds() {
+  return new Set(
+    [...document.querySelectorAll('#promptEditor .prompt-token')]
+      .map(token => token.dataset.fieldId)
+      .filter(Boolean)
+  );
+}
+
+function tokenHtml(field) {
+  return `<span class="prompt-token" contenteditable="false" data-field-id="${escapeHtml(field.id)}" data-field-label="${escapeHtml(field.label)}"><span class="token-label">${escapeHtml(field.label)}</span><small>${escapeHtml(field.id)}</small><button class="token-remove" type="button" title="Удалить поле" aria-label="Удалить поле">×</button></span>`;
+}
+
+function chipInnerHtml(field) {
+  return `<span>${escapeHtml(field.label)}</span><small>${escapeHtml(field.id)}</small>`;
 }
 
 function serializePrompt() {
@@ -213,9 +317,7 @@ async function saveSettings(section) {
       provider: state.provider,
       endpointUrl: document.getElementById('endpointUrl').value,
       modelId: document.getElementById('modelId').value,
-      apiKeyPresent: Boolean(document.getElementById('apiKey').value),
-      temperature: document.getElementById('temperature').value,
-      maxTokens: document.getElementById('maxTokens').value
+      apiKeyPresent: Boolean(document.getElementById('apiKey').value)
     },
     proxy: {
       enabled: document.getElementById('useProxy').checked,

@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ЛидПросвет</title>
+    <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="app-shell">
+    <header class="topbar">
+        <div class="brand">
+            <div class="logo-wrap">
+                <img class="logo-img" src="/logoHorizontal.png" alt="ЛидПросвет" onerror="this.style.display='none'; this.nextElementSibling.style.display='grid';">
+                <div class="logo-fallback" style="display:none;">ЛП</div>
+            </div>
+        </div>
+    </header>
+
+    <main class="workspace">
+        <section class="tabs-card">
+            <div class="tabs">
+                <button class="tab-button active" data-tab="integration" type="button">Интеграция</button>
+                <button class="tab-button" data-tab="llm" type="button">Настройки LLM</button>
+            </div>
+
+            <div class="tab-panel active" id="tab-integration">
+                <div class="integration-grid">
+                    <aside class="fields-panel">
+                        <div class="panel-heading compact-heading">
+                            <div>
+                                <h2>Поля контакта</h2>
+                                <p>Перетащи нужные поля в промпт справа.</p>
+                            </div>
+                            <button class="small-button" id="reloadFieldsBtn" type="button">Обновить</button>
+                        </div>
+
+                        <label class="search-box">
+                            <span>Поиск поля</span>
+                            <input id="fieldSearch" type="text" placeholder="Например: сайт, ИНН, email">
+                        </label>
+
+                        <div class="field-list" id="fieldList" aria-label="Доступные поля контакта"></div>
+                    </aside>
+
+                    <section class="prompt-panel">
+                        <div class="panel-heading prompt-heading compact-heading">
+                            <div>
+                                <h2>Промпт для LLM</h2>
+                                <p>Плашки в тексте будут заменяться реальными значениями из Bitrix24.</p>
+                            </div>
+                            <div class="prompt-actions">
+                                <button class="small-button" id="resetPromptBtn" type="button">Сбросить</button>
+                                <button class="primary-button" id="saveIntegrationBtn" type="button">Сохранить</button>
+                            </div>
+                        </div>
+
+                        <div class="prompt-editor" id="promptEditor" contenteditable="true" spellcheck="true"></div>
+
+                        <div class="template-preview">
+                            <div class="preview-title">Технический шаблон</div>
+                            <textarea id="serializedPrompt" readonly></textarea>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <div class="tab-panel" id="tab-llm">
+                <div class="llm-grid">
+                    <section class="settings-panel">
+                        <div class="panel-heading compact-heading">
+                            <div>
+                                <h2>Провайдер и модель</h2>
+                                <p>Формат запроса будет зависеть от выбранного API.</p>
+                            </div>
+                        </div>
+
+                        <div class="provider-switch" role="group" aria-label="Провайдер LLM">
+                            <button class="provider-button active" data-provider="openai" type="button">OpenAI API</button>
+                            <button class="provider-button" data-provider="google" type="button">Google API</button>
+                        </div>
+
+                        <div class="form-grid single">
+                            <label class="form-field">
+                                <span>Endpoint URL</span>
+                                <input id="endpointUrl" type="text" value="https://api.openai.com/v1/chat/completions">
+                            </label>
+                            <label class="form-field">
+                                <span>ID модели</span>
+                                <input id="modelId" type="text" value="gpt-4.1-mini">
+                            </label>
+                            <label class="form-field">
+                                <span>API-ключ</span>
+                                <input id="apiKey" type="password" placeholder="Вставь ключ API">
+                            </label>
+                        </div>
+                    </section>
+
+                    <section class="settings-panel proxy-panel">
+                        <div class="proxy-title-row">
+                            <label class="switch">
+                                <input id="useProxy" type="checkbox">
+                                <span class="slider"></span>
+                            </label>
+                            <div>
+                                <h2>Использовать Proxy</h2>
+                                <p>Если включено, LLM-запросы будут отправляться через указанный proxy.</p>
+                            </div>
+                        </div>
+
+                        <div class="proxy-fields disabled" id="proxyFields">
+                            <div class="form-row">
+                                <label class="form-field">
+                                    <span>Proxy host / IP</span>
+                                    <input id="proxyHost" type="text" placeholder="127.0.0.1" disabled>
+                                </label>
+                                <label class="form-field proxy-port-field">
+                                    <span>Proxy port</span>
+                                    <input id="proxyPort" type="number" placeholder="8080" disabled>
+                                </label>
+                            </div>
+                            <div class="form-row">
+                                <label class="form-field">
+                                    <span>Логин</span>
+                                    <input id="proxyLogin" type="text" placeholder="proxy-user" disabled>
+                                </label>
+                                <label class="form-field">
+                                    <span>Пароль</span>
+                                    <input id="proxyPassword" type="password" placeholder="proxy-password" disabled>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="save-row">
+                            <button class="primary-button" id="saveLlmBtn" type="button">Сохранить LLM-настройки</button>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+
+<div class="drag-clone" id="dragClone" aria-hidden="true"></div>
+<div class="toast" id="toast"></div>
+<script src="/js/app.js"></script>
+</body>
+</html>
