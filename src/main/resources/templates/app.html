@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title th:text="${appName} + ' — настройки'">ЛидПросвет — настройки</title>
+    <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="app-shell">
+    <header class="topbar">
+        <div class="brand">
+            <div class="logo-wrap">
+                <img class="logo-img" src="/logoHorizontal.png" alt="ЛидПросвет" onerror="this.style.display='none'; this.nextElementSibling.style.display='grid';">
+                <div class="logo-fallback" style="display:none;">ЛП</div>
+            </div>
+            <div>
+                <div class="brand-title" th:text="${appName}">ЛидПросвет</div>
+                <div class="brand-subtitle">AI-подсказки по новым лидам Bitrix24</div>
+            </div>
+        </div>
+        <div class="status-pill">
+            <span class="status-dot"></span>
+            Каркас приложения активен
+        </div>
+    </header>
+
+    <main class="workspace">
+        <section class="hero-card">
+            <div>
+                <p class="eyebrow">Server-side Bitrix24 local app</p>
+                <h1>Настройки ЛидПросвета</h1>
+                <p class="hero-text">Здесь будет настраиваться сбор полей контакта, шаблон промпта, провайдер LLM и прокси. Сейчас это красивый мок-интерфейс, готовый к подключению реальных REST-методов Bitrix24.</p>
+            </div>
+            <div class="hero-meta">
+                <div class="meta-item"><span>URL</span><strong th:text="${baseUrl}">https://leadprosvet.abs7.ru</strong></div>
+                <div class="meta-item"><span>Версия</span><strong th:text="${appVersion}">0.0.1</strong></div>
+            </div>
+        </section>
+
+        <section class="tabs-card">
+            <div class="tabs">
+                <button class="tab-button active" data-tab="integration">Интеграция</button>
+                <button class="tab-button" data-tab="llm">Настройки LLM</button>
+            </div>
+
+            <div class="tab-panel active" id="tab-integration">
+                <div class="integration-grid">
+                    <aside class="fields-panel">
+                        <div class="panel-heading">
+                            <div>
+                                <h2>Поля контакта</h2>
+                                <p>Плашки можно перетаскивать в промпт справа.</p>
+                            </div>
+                            <button class="small-button" id="reloadFieldsBtn" type="button">Обновить</button>
+                        </div>
+
+                        <label class="search-box">
+                            <span>Поиск поля</span>
+                            <input id="fieldSearch" type="text" placeholder="Например: сайт, ИНН, email">
+                        </label>
+
+                        <div class="field-list" id="fieldList" aria-label="Доступные поля контакта"></div>
+                    </aside>
+
+                    <section class="prompt-panel">
+                        <div class="panel-heading prompt-heading">
+                            <div>
+                                <h2>Промпт для LLM</h2>
+                                <p>Вставляй поля в нужные места текста. При обработке лида плашки будут заменяться реальными значениями.</p>
+                            </div>
+                            <div class="prompt-actions">
+                                <button class="small-button" id="resetPromptBtn" type="button">Сбросить</button>
+                                <button class="primary-button" id="saveIntegrationBtn" type="button">Сохранить</button>
+                            </div>
+                        </div>
+
+                        <div class="prompt-editor" id="promptEditor" contenteditable="true" spellcheck="true">
+                            <p>Собери краткую справку о компании для первого звонка менеджера.</p>
+                            <p>Данные из Bitrix24:</p>
+                            <p>Компания: <span class="prompt-token" draggable="true" contenteditable="false" data-field-id="COMPANY_TITLE" data-field-label="Компания">Компания</span></p>
+                            <p>Сайт: <span class="prompt-token" draggable="true" contenteditable="false" data-field-id="WEB" data-field-label="Сайт">Сайт</span></p>
+                            <p>ИНН: <span class="prompt-token" draggable="true" contenteditable="false" data-field-id="UF_CRM_INN" data-field-label="ИНН">ИНН</span></p>
+                            <p>Нужно найти и структурировать: чем занимается компания, ключевые продукты/услуги, размер/география если доступно, что важно знать перед первым звонком, возможные боли и первый заход для разговора.</p>
+                        </div>
+
+                        <div class="template-preview">
+                            <div class="preview-title">Технический шаблон</div>
+                            <textarea id="serializedPrompt" readonly></textarea>
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <div class="tab-panel" id="tab-llm">
+                <div class="llm-grid">
+                    <section class="settings-panel">
+                        <div class="panel-heading">
+                            <div>
+                                <h2>Провайдер и модель</h2>
+                                <p>Настройки запроса к OpenAI-compatible API или Google Gemini API.</p>
+                            </div>
+                        </div>
+
+                        <div class="provider-switch" role="group" aria-label="Провайдер LLM">
+                            <button class="provider-button active" data-provider="openai" type="button">OpenAI API</button>
+                            <button class="provider-button" data-provider="google" type="button">Google API</button>
+                        </div>
+
+                        <div class="form-grid single">
+                            <label class="form-field">
+                                <span>Endpoint URL</span>
+                                <input id="endpointUrl" type="text" value="https://api.openai.com/v1/chat/completions">
+                            </label>
+                            <label class="form-field">
+                                <span>ID модели</span>
+                                <input id="modelId" type="text" value="gpt-4.1-mini">
+                            </label>
+                            <label class="form-field">
+                                <span>API-ключ</span>
+                                <input id="apiKey" type="password" placeholder="Вставь ключ API">
+                            </label>
+                            <div class="form-row">
+                                <label class="form-field">
+                                    <span>Temperature</span>
+                                    <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.3">
+                                </label>
+                                <label class="form-field">
+                                    <span>Max tokens</span>
+                                    <input id="maxTokens" type="number" min="256" step="256" value="4096">
+                                </label>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="settings-panel proxy-panel">
+                        <div class="panel-heading">
+                            <div>
+                                <h2>Прокси</h2>
+                                <p>Если включено, все LLM-запросы будут отправляться через указанный proxy.</p>
+                            </div>
+                            <label class="switch">
+                                <input id="useProxy" type="checkbox">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="proxy-fields disabled" id="proxyFields">
+                            <label class="form-field">
+                                <span>Proxy host / IP</span>
+                                <input id="proxyHost" type="text" placeholder="127.0.0.1" disabled>
+                            </label>
+                            <label class="form-field">
+                                <span>Proxy port</span>
+                                <input id="proxyPort" type="number" placeholder="8080" disabled>
+                            </label>
+                            <label class="form-field">
+                                <span>Логин</span>
+                                <input id="proxyLogin" type="text" placeholder="proxy-user" disabled>
+                            </label>
+                            <label class="form-field">
+                                <span>Пароль</span>
+                                <input id="proxyPassword" type="password" placeholder="proxy-password" disabled>
+                            </label>
+                        </div>
+
+                        <div class="save-row">
+                            <button class="primary-button" id="saveLlmBtn" type="button">Сохранить LLM-настройки</button>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title th:text="${appName} + ' — установка'">ЛидПросвет — установка</title>
+    <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="app-shell slim">
+    <header class="topbar">
+        <div class="brand">
+            <div class="logo-wrap">
+                <img class="logo-img" src="/logoHorizontal.png" alt="ЛидПросвет" onerror="this.style.display='none'; this.nextElementSibling.style.display='grid';">
+                <div class="logo-fallback" style="display:none;">ЛП</div>
+            </div>
+            <div>
+                <div class="brand-title" th:text="${appName}">ЛидПросвет</div>
+                <div class="brand-subtitle">Первоначальная установка Bitrix24-приложения</div>
+            </div>
+        </div>
+    </header>
+
+    <main class="workspace">
+        <section class="hero-card">
+            <div>
+                <p class="eyebrow">Installation callback</p>
+                <h1>Endpoint установки доступен</h1>
+                <p class="hero-text">Bitrix24 смог открыть путь первоначальной установки. На следующем этапе здесь будет сохранение OAuth-токенов, регистрация событий и завершение установки.</p>
+            </div>
+        </section>
+
+        <section class="debug-card">
+            <h2>Диагностика</h2>
+            <dl>
+                <dt>Метод</dt><dd th:text="${method}">GET</dd>
+                <dt>Base URL</dt><dd th:text="${baseUrl}">https://leadprosvet.abs7.ru</dd>
+                <dt>Время сервера</dt><dd th:text="${serverTime}">now</dd>
+            </dl>
+            <h3>Параметры</h3>
+            <pre th:text="${params}">params</pre>
+            <h3>Body</h3>
+            <pre th:text="${body}">body</pre>
+        </section>
+    </main>
+</div>
+</body>
+</html>
