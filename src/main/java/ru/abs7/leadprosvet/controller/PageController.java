@@ -1,5 +1,6 @@
 package ru.abs7.leadprosvet.controller;
 
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
@@ -11,7 +12,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.ResponseBody;
 
-import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
@@ -20,11 +20,7 @@ public class PageController {
 
     private static final Logger log = LoggerFactory.getLogger(PageController.class);
 
-    private final String indexHtml;
-
-    public PageController() {
-        this.indexHtml = loadIndexHtml();
-    }
+    private volatile String cachedIndexHtml;
 
     @RequestMapping(
             value = {"/", "/bitrix/app", "/bitrix/settings"},
@@ -35,22 +31,62 @@ public class PageController {
     public String app(HttpServletRequest request) {
         log.debug("Serving LeadProsvet UI: method={}, uri={}, remote={}",
                 request.getMethod(), request.getRequestURI(), request.getRemoteAddr());
-        return indexHtml;
+        return indexHtml();
     }
 
     @GetMapping(value = "/healthz", produces = "text/plain; charset=UTF-8")
     @ResponseBody
     public String healthz() {
-        log.debug("Health check requested");
         return "OK";
     }
 
-    private String loadIndexHtml() {
+    private String indexHtml() {
+        String current = cachedIndexHtml;
+        if (current != null) {
+            return current;
+        }
+        synchronized (this) {
+            if (cachedIndexHtml == null) {
+                cachedIndexHtml = loadIndexHtmlSafely();
+            }
+            return cachedIndexHtml;
+        }
+    }
+
+    private String loadIndexHtmlSafely() {
         ClassPathResource resource = new ClassPathResource("static/index.html");
         try {
             return StreamUtils.copyToString(resource.getInputStream(), StandardCharsets.UTF_8);
         } catch (IOException e) {
-            throw new IllegalStateException("Cannot load static/index.html", e);
+            log.error("Cannot load static/index.html", e);
+            return fallbackHtml();
         }
+    }
+
+    private String fallbackHtml() {
+        return """
+                <!doctype html>
+                <html lang=\"ru\">
+                <head>
+                    <meta charset=\"UTF-8\">
+                    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+                    <title>ЛидПросвет</title>
+                    <style>
+                        html, body { height: 100%; margin: 0; font-family: Arial, sans-serif; background: #f5f7fb; color: #111827; }
+                        body { display: grid; place-items: center; }
+                        .card { width: min(720px, calc(100vw - 40px)); padding: 28px; border-radius: 20px; background: white; border: 1px solid #e5e7eb; box-shadow: 0 22px 60px rgba(15,23,42,.08); }
+                        h1 { margin: 0 0 12px; font-size: 30px; }
+                        p { margin: 0; color: #64748b; line-height: 1.5; }
+                        code { color: #2563eb; }
+                    </style>
+                </head>
+                <body>
+                    <div class=\"card\">
+                        <h1>ЛидПросвет</h1>
+                        <p>Приложение запущено, но файл интерфейса <code>src/main/resources/static/index.html</code> не попал в сборку.</p>
+                    </div>
+                </body>
+                </html>
+                """;
     }
 }

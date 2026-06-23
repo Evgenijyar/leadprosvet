@@ -19,7 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
   bindProxySwitch();
   bindPromptEditor();
   bindButtons();
-  loadFields().then(loadCurrentSettings);
+  loadFields();
   updateSerializedPrompt();
 });
 
@@ -105,11 +105,11 @@ function bindButtons() {
 
 async function loadFields() {
   try {
-    const response = await fetch('/api/bitrix/contact-fields');
+    const response = await fetch('/api/settings/contact-fields');
     state.fields = await response.json();
     renderFields();
   } catch (error) {
-    showToast('Не удалось загрузить поля контакта: ' + error.message);
+    showToast('Не удалось загрузить моковые поля: ' + error.message);
   }
 }
 
@@ -307,64 +307,6 @@ function updateSerializedPrompt() {
   document.getElementById('serializedPrompt').value = serializePrompt();
 }
 
-
-async function loadCurrentSettings() {
-  try {
-    const response = await fetch('/api/settings/current');
-    if (!response.ok) return;
-    const settings = await response.json();
-    if (!settings || Object.keys(settings).length === 0) return;
-
-    if (settings.provider) {
-      state.provider = settings.provider;
-      document.querySelectorAll('.provider-button').forEach(button => {
-        button.classList.toggle('active', button.dataset.provider === state.provider);
-      });
-    }
-
-    if (settings.promptTemplate) {
-      document.getElementById('promptEditor').innerHTML = promptTextToHtml(String(settings.promptTemplate));
-      renderFields();
-    }
-
-    const llm = settings.llm || {};
-    setValue('endpointUrl', llm.endpointUrl);
-    setValue('modelId', llm.modelId);
-    setValue('apiKey', llm.apiKey);
-
-    const proxy = settings.proxy || {};
-    const useProxy = document.getElementById('useProxy');
-    useProxy.checked = Boolean(proxy.enabled);
-    useProxy.dispatchEvent(new Event('change'));
-    setValue('proxyHost', proxy.host);
-    setValue('proxyPort', proxy.port);
-    setValue('proxyLogin', proxy.login);
-    setValue('proxyPassword', proxy.password);
-
-    updateSerializedPrompt();
-  } catch (error) {
-    console.warn('Settings load failed', error);
-  }
-}
-
-function promptTextToHtml(text) {
-  const escaped = escapeHtml(text);
-  const withTokens = escaped.replace(/\{\{([A-Z0-9_]+)}}/g, (_, fieldId) => {
-    const field = state.fields.find(item => item.id === fieldId) || { id: fieldId, label: fieldId };
-    return tokenHtml(field);
-  });
-  return withTokens
-    .split(/\n{2,}/)
-    .map(part => `<p>${part.replace(/\n/g, '<br>')}</p>`)
-    .join('');
-}
-
-function setValue(id, value) {
-  if (value === undefined || value === null) return;
-  const element = document.getElementById(id);
-  if (element) element.value = value;
-}
-
 async function saveSettings(section) {
   updateSerializedPrompt();
   const payload = {
@@ -375,7 +317,6 @@ async function saveSettings(section) {
       provider: state.provider,
       endpointUrl: document.getElementById('endpointUrl').value,
       modelId: document.getElementById('modelId').value,
-      apiKey: document.getElementById('apiKey').value,
       apiKeyPresent: Boolean(document.getElementById('apiKey').value)
     },
     proxy: {
@@ -383,7 +324,6 @@ async function saveSettings(section) {
       host: document.getElementById('proxyHost').value,
       port: document.getElementById('proxyPort').value,
       login: document.getElementById('proxyLogin').value,
-      password: document.getElementById('proxyPassword').value,
       passwordPresent: Boolean(document.getElementById('proxyPassword').value)
     }
   };
@@ -395,7 +335,7 @@ async function saveSettings(section) {
       body: JSON.stringify(payload)
     });
     const result = await response.json();
-    showToast(result.ok ? 'Настройки сохранены' : (result.message || 'Настройки сохранены'));
+    showToast(result.message || 'Настройки сохранены');
   } catch (error) {
     showToast('Ошибка сохранения: ' + error.message);
   }

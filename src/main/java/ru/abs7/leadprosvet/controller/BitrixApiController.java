@@ -38,8 +38,12 @@ public class BitrixApiController {
         response.put("ok", true);
         response.put("portal", portalView(portal));
         response.put("appInfo", safeRestCall(portal, "app.info"));
-        response.put("userCurrent", safeRestCall(portal, "user.current"));
         response.put("userAdmin", safeRestCall(portal, "user.admin"));
+        response.put("userCurrent", Map.of(
+                "ok", false,
+                "skipped", true,
+                "reason", "user.current не вызывается: у локального приложения может не быть user-scope, для нас достаточно user.admin"
+        ));
         response.put("contactFields", contactFieldsSummary(portal));
         return ResponseEntity.ok(response);
     }
