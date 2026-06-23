@@ -437,3 +437,49 @@ h2 { margin: 0; font-size: 20px; letter-spacing: -.035em; }
     .proxy-port-field { max-width: none; }
     .prompt-heading, .panel-heading { flex-direction: column; }
 }
+
+.trigger-mode-card {
+    margin: 14px 0 16px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: var(--card-soft);
+    display: grid;
+    gap: 12px;
+}
+
+.trigger-mode-card h3 {
+    margin: 0;
+    font-size: 16px;
+    letter-spacing: -.02em;
+}
+
+.trigger-mode-card p {
+    margin: 4px 0 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.trigger-mode-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.trigger-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: #fff;
+    color: #334155;
+    font-weight: 800;
+    font-size: 13px;
+}
+
+.trigger-option input {
+    accent-color: var(--primary);
+}

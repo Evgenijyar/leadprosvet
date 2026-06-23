@@ -97,6 +97,7 @@ function bindButtons() {
   });
   document.getElementById('saveIntegrationBtn').addEventListener('click', () => saveSettings('integration'));
   document.getElementById('saveLlmBtn').addEventListener('click', () => saveSettings('llm'));
+  document.getElementById('applyWebhookModeBtn')?.addEventListener('click', applyWebhookMode);
 
   document.addEventListener('pointermove', onPointerMove);
   document.addEventListener('pointerup', onPointerUp);
@@ -336,6 +337,8 @@ async function loadCurrentSettings() {
       renderFields();
     }
 
+    setLeadTriggerEvent(settings.leadTriggerEvent || 'ONCRMLEADADD');
+
     const llm = settings.llm || {};
     setValue('endpointUrl', llm.endpointUrl);
     setValue('modelId', llm.modelId);
@@ -387,6 +390,7 @@ async function saveSettings(section) {
       apiKey: document.getElementById('apiKey').value,
       apiKeyPresent: Boolean(document.getElementById('apiKey').value)
     },
+    leadTriggerEvent: currentLeadTriggerEvent(),
     proxy: {
       enabled: document.getElementById('useProxy').checked,
       host: document.getElementById('proxyHost').value,
@@ -408,6 +412,36 @@ async function saveSettings(section) {
   } catch (error) {
     showToast('Ошибка сохранения: ' + error.message);
   }
+}
+
+
+async function applyWebhookMode() {
+  await saveSettings('llm');
+  try {
+    const response = await fetch('/api/bitrix/setup/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok === false) {
+      throw new Error(result.error || `HTTP ${response.status}`);
+    }
+    const bind = result.bindSelectedLeadEvent || {};
+    showToast(bind.ok ? `Вебхук применён: ${bind.selectedEventLabel || bind.selectedEvent || currentLeadTriggerEvent()}` : 'Setup выполнен, но вебхук вернул предупреждение');
+  } catch (error) {
+    showToast('Ошибка применения вебхука: ' + error.message);
+  }
+}
+
+function currentLeadTriggerEvent() {
+  return document.querySelector('input[name="leadTriggerEvent"]:checked')?.value || 'ONCRMLEADADD';
+}
+
+function setLeadTriggerEvent(value) {
+  const normalized = value === 'ONCRMLEADUPDATE' ? 'ONCRMLEADUPDATE' : 'ONCRMLEADADD';
+  document.querySelectorAll('input[name="leadTriggerEvent"]').forEach(input => {
+    input.checked = input.value === normalized;
+  });
 }
 
 function showToast(message) {

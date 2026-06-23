@@ -114,13 +114,21 @@ public class BitrixRestClient {
                 .build();
 
         try {
-            log.info("Refreshing Bitrix token for portal {} via {}", portal.getDomain(), tokenUrl);
+            log.info("==================== BITRIX TOKEN REFRESH REQUEST START ====================");
+            log.info("Bitrix token refresh URL: {}", tokenUrl);
+            log.info("Bitrix token refresh body SAFE FULL:\n{}", maskSecrets(encodedBody));
+
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            String responseBody = response.body() == null ? "" : response.body();
+            log.info("==================== BITRIX TOKEN REFRESH RESPONSE START ====================");
+            log.info("Bitrix token refresh HTTP status: {}", response.statusCode());
+            log.info("Bitrix token refresh response SAFE FULL:\n{}", maskSecrets(responseBody));
+
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new BitrixRestException("Bitrix token refresh HTTP " + response.statusCode() + ": " + trim(response.body(), 900));
+                throw new BitrixRestException("Bitrix token refresh HTTP " + response.statusCode() + ": " + trim(responseBody, 900));
             }
 
-            Map<String, Object> payload = parseJsonObject(response.body());
+            Map<String, Object> payload = parseJsonObject(responseBody);
             Object error = payload.get("error");
             if (error != null && !String.valueOf(error).isBlank()) {
                 Object description = payload.get("error_description");
@@ -130,7 +138,7 @@ public class BitrixRestClient {
             String accessToken = stringValue(payload.get("access_token"));
             String refreshToken = stringValue(payload.get("refresh_token"));
             if (isBlank(accessToken)) {
-                throw new BitrixRestException("Bitrix token refresh response has no access_token: " + trim(response.body(), 900));
+                throw new BitrixRestException("Bitrix token refresh response has no access_token: " + trim(responseBody, 900));
             }
 
             portal.setAccessToken(accessToken);
@@ -188,12 +196,23 @@ public class BitrixRestClient {
                 .build();
 
         try {
-            log.info("Calling Bitrix REST method {} for portal {}", method, portal.getDomain());
+            log.info("==================== BITRIX REST REQUEST START ====================");
+            log.info("Bitrix REST method: {}", method);
+            log.info("Bitrix REST URL: {}", url);
+            log.info("Bitrix REST portal: {}", portal.getDomain());
+            log.info("Bitrix REST request body SAFE FULL:\n{}", maskSecrets(encodedBody));
+
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            String responseBody = response.body() == null ? "" : response.body();
+            log.info("==================== BITRIX REST RESPONSE START ====================");
+            log.info("Bitrix REST method: {}", method);
+            log.info("Bitrix REST HTTP status: {}", response.statusCode());
+            log.info("Bitrix REST response body SAFE FULL:\n{}", maskSecrets(responseBody));
+
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new BitrixRestException("Bitrix REST HTTP " + response.statusCode() + " for " + method + ": " + trim(response.body(), 900));
+                throw new BitrixRestException("Bitrix REST HTTP " + response.statusCode() + " for " + method + ": " + trim(responseBody, 900));
             }
-            Map<String, Object> payload = parseJsonObject(response.body());
+            Map<String, Object> payload = parseJsonObject(responseBody);
             Object error = payload.get("error");
             if (error != null && !String.valueOf(error).isBlank()) {
                 Object description = payload.get("error_description");
@@ -333,6 +352,21 @@ public class BitrixRestClient {
 
     private Object value(Object value) {
         return value == null ? "" : value;
+    }
+
+    private String maskSecrets(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        return value
+                .replaceAll("(?i)(access_token=)[^&\\s]+", "$1***")
+                .replaceAll("(?i)(refresh_token=)[^&\\s]+", "$1***")
+                .replaceAll("(?i)(client_secret=)[^&\\s]+", "$1***")
+                .replaceAll("(?i)(auth=)[^&\\s]+", "$1***")
+                .replaceAll("(?i)(application_token=)[^&\\s]+", "$1***")
+                .replaceAll("(?i)(\\\"access_token\\\"\\s*:\\s*\\\")[^\\\"]+", "$1***")
+                .replaceAll("(?i)(\\\"refresh_token\\\"\\s*:\\s*\\\")[^\\\"]+", "$1***")
+                .replaceAll("(?i)(\\\"client_secret\\\"\\s*:\\s*\\\")[^\\\"]+", "$1***");
     }
 
     private String trim(String value, int max) {

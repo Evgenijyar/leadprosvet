@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import ru.abs7.leadprosvet.domain.IncomingBitrixEvent;
 import ru.abs7.leadprosvet.service.BitrixEventLogService;
+import ru.abs7.leadprosvet.service.queue.LeadProcessingQueueService;
 
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
@@ -22,26 +23,39 @@ public class BitrixEventController {
     private static final Logger log = LoggerFactory.getLogger(BitrixEventController.class);
 
     private final BitrixEventLogService bitrixEventLogService;
+    private final LeadProcessingQueueService leadProcessingQueueService;
 
-    public BitrixEventController(BitrixEventLogService bitrixEventLogService) {
+    public BitrixEventController(BitrixEventLogService bitrixEventLogService, LeadProcessingQueueService leadProcessingQueueService) {
         this.bitrixEventLogService = bitrixEventLogService;
+        this.leadProcessingQueueService = leadProcessingQueueService;
     }
 
-    @PostMapping(value = {"/api/bitrix/events", "/api/bitrix/events/lead-add"}, consumes = MediaType.ALL_VALUE)
+    @PostMapping(value = {
+            "/api/bitrix/events",
+            "/api/bitrix/events/lead",
+            "/api/bitrix/events/lead-add",
+            "/api/bitrix/events/lead-update"
+    }, consumes = MediaType.ALL_VALUE)
     public ResponseEntity<Map<String, Object>> receiveEvent(
             @RequestParam Map<String, String> params,
             @RequestBody(required = false) String body,
             HttpServletRequest request
     ) {
-        log.info("Bitrix event received: ip={}, params={}, body={}", request.getRemoteAddr(), safeParams(params), safeBody(body));
+        log.info("==================== BITRIX WEBHOOK RECEIVED START ====================");
+        log.info("Bitrix webhook remoteIp={}", request.getRemoteAddr());
+        log.info("Bitrix webhook params SAFE={}", safeParams(params));
+        log.info("Bitrix webhook raw body SAFE=\n{}", safeBody(body));
+        log.info("==================== BITRIX WEBHOOK RECEIVED END ====================");
 
         IncomingBitrixEvent event = bitrixEventLogService.saveIncomingEvent(params, body, request.getRemoteAddr());
+        Map<String, Object> queueResult = leadProcessingQueueService.enqueueFromEvent(event);
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("ok", true);
         response.put("status", "accepted");
         response.put("eventLogId", event.getId());
-        response.put("message", "Bitrix event saved by LeadProsvet");
+        response.put("queue", queueResult);
+        response.put("message", "Bitrix event saved and queue decision completed by LeadProsvet");
         response.put("serverTime", OffsetDateTime.now().toString());
         return ResponseEntity.ok(response);
     }

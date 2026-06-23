@@ -20,20 +20,22 @@ public class BitrixSetupService {
     public static final String AI_FIELD_SHORT_NAME = "LP_AI_INFO";
     public static final String AI_FIELD_ID = "UF_CRM_" + AI_FIELD_SHORT_NAME;
     public static final String AI_FIELD_LABEL = "[ТЕХ.ПОЛЕ] ЛидПросвет";
-    public static final String LEAD_ADD_EVENT = "ONCRMLEADADD";
-
+    
     private final AppProperties appProperties;
     private final BitrixPortalService bitrixPortalService;
     private final BitrixRestClient bitrixRestClient;
+    private final LeadTriggerModeService triggerModeService;
 
     public BitrixSetupService(
             AppProperties appProperties,
             BitrixPortalService bitrixPortalService,
-            BitrixRestClient bitrixRestClient
+            BitrixRestClient bitrixRestClient,
+            LeadTriggerModeService triggerModeService
     ) {
         this.appProperties = appProperties;
         this.bitrixPortalService = bitrixPortalService;
         this.bitrixRestClient = bitrixRestClient;
+        this.triggerModeService = triggerModeService;
     }
 
     public Map<String, Object> status() {
@@ -48,8 +50,12 @@ public class BitrixSetupService {
         result.put("fieldsRestMethod", "crm.lead.fields");
         result.put("userFieldCreateRestMethod", "crm.lead.userfield.add");
         result.put("leadFieldsEndpoint", "/api/bitrix/lead-fields");
-        result.put("leadAddEvent", LEAD_ADD_EVENT);
-        result.put("leadAddHandler", leadAddHandlerUrl());
+        String currentEvent = triggerModeService.currentEvent();
+        result.put("selectedLeadEvent", currentEvent);
+        result.put("selectedLeadEventLabel", triggerModeService.label(currentEvent));
+        result.put("leadAddEvent", LeadTriggerModeService.LEAD_ADD_EVENT);
+        result.put("leadUpdateEvent", LeadTriggerModeService.LEAD_UPDATE_EVENT);
+        result.put("leadEventHandler", leadEventHandlerUrl());
         result.put("aiFieldId", AI_FIELD_ID);
         result.put("aiFieldLabel", AI_FIELD_LABEL);
         result.put("aiFieldTargetEntity", "lead");
@@ -65,7 +71,7 @@ public class BitrixSetupService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ok", true);
         result.put("createAiLeadField", createAiLeadField());
-        result.put("bindLeadAddEvent", bindLeadAddEvent());
+        result.put("bindSelectedLeadEvent", bindLeadAddEvent());
         result.put("status", status());
         return result;
     }
@@ -125,29 +131,71 @@ public class BitrixSetupService {
 
     public Map<String, Object> bindLeadAddEvent() {
         BitrixPortal portal = bitrixPortalService.currentPortalOrThrow();
+        String selectedEvent = triggerModeService.currentEvent();
+        String handler = leadEventHandlerUrl();
+
         Map<String, Object> result = new LinkedHashMap<>();
-        String handler = leadAddHandlerUrl();
-        result.put("event", LEAD_ADD_EVENT);
+        result.put("selectedEvent", selectedEvent);
+        result.put("selectedEventLabel", triggerModeService.label(selectedEvent));
         result.put("handler", handler);
+        result.put("unbindOldHandlers", unbindStaleLeadHandlers(portal, selectedEvent, handler));
 
         try {
             Map<String, Object> payload = bitrixRestClient.call(portal, "event.bind", Map.of(
-                    "event", LEAD_ADD_EVENT,
+                    "event", selectedEvent,
                     "handler", handler
             ));
             result.put("ok", true);
             result.put("restResult", payload.get("result"));
-            log.info("Bitrix event {} bound to {} for portal {}", LEAD_ADD_EVENT, handler, portal.getDomain());
+            log.info("Bitrix selected event {} bound to {} for portal {}", selectedEvent, handler, portal.getDomain());
         } catch (RuntimeException e) {
             String message = Objects.toString(e.getMessage(), "");
-            result.put("ok", false);
+            boolean alreadyBound = message.toLowerCase().contains("already") || message.toLowerCase().contains("exists");
+            result.put("ok", alreadyBound);
             result.put("error", message);
-            if (message.toLowerCase().contains("already") || message.toLowerCase().contains("exists")) {
+            if (alreadyBound) {
                 result.put("probablyAlreadyBound", true);
             }
-            log.warn("Cannot bind Bitrix event {} to {} for portal {}: {}", LEAD_ADD_EVENT, handler, portal.getDomain(), message);
+            log.warn("Cannot bind Bitrix selected event {} to {} for portal {}: {}", selectedEvent, handler, portal.getDomain(), message);
         }
         return result;
+    }
+
+    private List<Map<String, Object>> unbindStaleLeadHandlers(BitrixPortal portal, String selectedEvent, String selectedHandler) {
+        List<Map<String, Object>> results = new ArrayList<>();
+        List<String> events = List.of(LeadTriggerModeService.LEAD_ADD_EVENT, LeadTriggerModeService.LEAD_UPDATE_EVENT);
+        List<String> handlers = List.of(
+                leadEventHandlerUrl(),
+                legacyLeadAddHandlerUrl(),
+                legacyLeadUpdateHandlerUrl()
+        );
+
+        for (String event : events) {
+            for (String handler : handlers) {
+                if (event.equals(selectedEvent) && handler.equals(selectedHandler)) {
+                    continue;
+                }
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("event", event);
+                item.put("handler", handler);
+                try {
+                    Map<String, Object> payload = bitrixRestClient.call(portal, "event.unbind", Map.of(
+                            "event", event,
+                            "handler", handler
+                    ));
+                    item.put("ok", true);
+                    item.put("restResult", payload.get("result"));
+                    log.info("Bitrix stale event handler unbound: event={}, handler={}, portal={}", event, handler, portal.getDomain());
+                } catch (RuntimeException e) {
+                    item.put("ok", false);
+                    item.put("ignored", true);
+                    item.put("error", e.getMessage());
+                    log.info("Bitrix stale event handler unbind ignored: event={}, handler={}, portal={}, error={}", event, handler, portal.getDomain(), e.getMessage());
+                }
+                results.add(item);
+            }
+        }
+        return results;
     }
 
     private FieldCheck checkAiLeadField(BitrixPortal portal) {
@@ -251,8 +299,16 @@ public class BitrixSetupService {
         return result;
     }
 
-    private String leadAddHandlerUrl() {
+    private String leadEventHandlerUrl() {
+        return trimTrailingSlash(appProperties.baseUrl()) + "/api/bitrix/events/lead";
+    }
+
+    private String legacyLeadAddHandlerUrl() {
         return trimTrailingSlash(appProperties.baseUrl()) + "/api/bitrix/events/lead-add";
+    }
+
+    private String legacyLeadUpdateHandlerUrl() {
+        return trimTrailingSlash(appProperties.baseUrl()) + "/api/bitrix/events/lead-update";
     }
 
     private String trimTrailingSlash(String value) {

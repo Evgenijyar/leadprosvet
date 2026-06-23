@@ -80,6 +80,24 @@
                             <button class="provider-button" data-provider="google" type="button">Google API</button>
                         </div>
 
+                        <div class="trigger-mode-card">
+                            <div>
+                                <h3>Когда запускать обработку лида</h3>
+                                <p>Одновременно в Bitrix24 будет привязан только один вебхук: либо новый лид, либо изменение лида.</p>
+                            </div>
+                            <div class="trigger-mode-options" role="radiogroup" aria-label="Событие запуска обработки лида">
+                                <label class="trigger-option">
+                                    <input type="radio" name="leadTriggerEvent" value="ONCRMLEADADD" checked>
+                                    <span>Новый лид</span>
+                                </label>
+                                <label class="trigger-option">
+                                    <input type="radio" name="leadTriggerEvent" value="ONCRMLEADUPDATE">
+                                    <span>Изменение лида</span>
+                                </label>
+                            </div>
+                            <button class="small-button" id="applyWebhookModeBtn" type="button">Применить вебхук в Bitrix</button>
+                        </div>
+
                         <div class="form-grid single">
                             <label class="form-field">
                                 <span>Endpoint URL</span>
