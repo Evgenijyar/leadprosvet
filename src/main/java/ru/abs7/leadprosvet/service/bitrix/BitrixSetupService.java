@@ -6,7 +6,9 @@ import org.springframework.stereotype.Service;
 import ru.abs7.leadprosvet.config.AppProperties;
 import ru.abs7.leadprosvet.domain.BitrixPortal;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -36,6 +38,8 @@ public class BitrixSetupService {
 
     public Map<String, Object> status() {
         BitrixPortal portal = bitrixPortalService.currentPortalOrThrow();
+        FieldCheck fieldCheck = checkAiField(portal);
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ok", true);
         result.put("portalDomain", nullToEmpty(portal.getDomain()));
@@ -44,7 +48,10 @@ public class BitrixSetupService {
         result.put("leadAddHandler", leadAddHandlerUrl());
         result.put("aiFieldId", AI_FIELD_ID);
         result.put("aiFieldLabel", AI_FIELD_LABEL);
-        result.put("aiFieldExists", aiFieldExists(portal));
+        result.put("aiFieldExists", fieldCheck.exists());
+        result.put("aiFieldExact", fieldCheck.exact());
+        result.put("aiFieldMatchesByLabel", fieldCheck.matchesByLabel());
+        result.put("aiFieldCheckError", fieldCheck.error());
         result.put("appInfo", safeCall(portal, "app.info", Map.of()));
         return result;
     }
@@ -62,9 +69,12 @@ public class BitrixSetupService {
         BitrixPortal portal = bitrixPortalService.currentPortalOrThrow();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("fieldId", AI_FIELD_ID);
+        result.put("fieldShortName", AI_FIELD_SHORT_NAME);
         result.put("fieldLabel", AI_FIELD_LABEL);
 
-        if (aiFieldExists(portal)) {
+        FieldCheck before = checkAiField(portal);
+        result.put("before", before.toMap());
+        if (before.exists()) {
             result.put("ok", true);
             result.put("alreadyExists", true);
             result.put("message", "Поле уже существует");
@@ -89,13 +99,19 @@ public class BitrixSetupService {
 
         try {
             Map<String, Object> payload = bitrixRestClient.call(portal, "crm.contact.userfield.add", Map.of("fields", fields));
-            result.put("ok", true);
+            FieldCheck after = checkAiField(portal);
+            result.put("ok", after.exists());
             result.put("alreadyExists", false);
             result.put("restResult", payload.get("result"));
-            log.info("Bitrix contact user field {} created for portal {}", AI_FIELD_ID, portal.getDomain());
+            result.put("after", after.toMap());
+            if (!after.exists()) {
+                result.put("warning", "Bitrix вернул успешный ответ, но поле пока не найдено в crm.contact.fields. Проверь /api/bitrix/setup/status через 5-10 секунд.");
+            }
+            log.info("Bitrix contact user field {} create call completed for portal {}. Exists after call: {}", AI_FIELD_ID, portal.getDomain(), after.exists());
         } catch (RuntimeException e) {
             result.put("ok", false);
             result.put("error", e.getMessage());
+            log.warn("Cannot create Bitrix contact user field {} for portal {}: {}", AI_FIELD_ID, portal.getDomain(), e.getMessage());
         }
         return result;
     }
@@ -122,21 +138,97 @@ public class BitrixSetupService {
             if (message.toLowerCase().contains("already") || message.toLowerCase().contains("exists")) {
                 result.put("probablyAlreadyBound", true);
             }
+            log.warn("Cannot bind Bitrix event {} to {} for portal {}: {}", LEAD_ADD_EVENT, handler, portal.getDomain(), message);
         }
         return result;
     }
 
-    private boolean aiFieldExists(BitrixPortal portal) {
+    private FieldCheck checkAiField(BitrixPortal portal) {
+        Map<String, Object> exact = null;
+        List<Map<String, Object>> matchesByLabel = new ArrayList<>();
+        String error = "";
+
         try {
             Map<String, Object> payload = bitrixRestClient.call(portal, "crm.contact.fields");
             Object rawResult = payload.get("result");
             if (rawResult instanceof Map<?, ?> fields) {
-                return fields.containsKey(AI_FIELD_ID);
+                for (Map.Entry<?, ?> entry : fields.entrySet()) {
+                    String id = String.valueOf(entry.getKey());
+                    if (!(entry.getValue() instanceof Map<?, ?> fieldMap)) {
+                        continue;
+                    }
+                    Map<String, Object> view = fieldView(id, fieldMap);
+                    if (AI_FIELD_ID.equals(id)) {
+                        exact = view;
+                    }
+                    String label = Objects.toString(view.get("label"), "").trim();
+                    if (AI_FIELD_LABEL.equals(label)) {
+                        matchesByLabel.add(view);
+                    }
+                }
             }
         } catch (RuntimeException e) {
-            log.warn("Cannot check Bitrix AI field existence: {}", e.getMessage());
+            error = e.getMessage();
+            log.warn("Cannot check Bitrix AI field existence through crm.contact.fields: {}", error);
         }
-        return false;
+
+        if (exact == null) {
+            try {
+                Map<String, Object> payload = bitrixRestClient.call(portal, "crm.contact.userfield.list");
+                Object rawResult = payload.get("result");
+                if (rawResult instanceof Iterable<?> items) {
+                    for (Object item : items) {
+                        if (!(item instanceof Map<?, ?> fieldMap)) {
+                            continue;
+                        }
+                        String id = firstNonBlank(
+                                stringValue(fieldMap.get("FIELD_NAME")),
+                                stringValue(fieldMap.get("fieldName")),
+                                stringValue(fieldMap.get("ID"))
+                        );
+                        Map<String, Object> view = fieldView(id, fieldMap);
+                        if (AI_FIELD_ID.equals(id)) {
+                            exact = view;
+                        }
+                        String label = Objects.toString(view.get("label"), "").trim();
+                        if (AI_FIELD_LABEL.equals(label) && matchesByLabel.stream().noneMatch(existing -> Objects.equals(existing.get("id"), view.get("id")))) {
+                            matchesByLabel.add(view);
+                        }
+                    }
+                }
+            } catch (RuntimeException e) {
+                if (error.isBlank()) {
+                    error = e.getMessage();
+                } else {
+                    error = error + " | crm.contact.userfield.list: " + e.getMessage();
+                }
+                log.warn("Cannot check Bitrix AI field existence through crm.contact.userfield.list: {}", e.getMessage());
+            }
+        }
+
+        return new FieldCheck(exact != null || !matchesByLabel.isEmpty(), exact, matchesByLabel, error);
+    }
+
+    private Map<String, Object> fieldView(String id, Map<?, ?> fieldMap) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("id", id);
+        view.put("label", firstNonBlank(
+                stringValue(fieldMap.get("formLabel")),
+                stringValue(fieldMap.get("EDIT_FORM_LABEL")),
+                stringValue(fieldMap.get("listLabel")),
+                stringValue(fieldMap.get("LIST_COLUMN_LABEL")),
+                stringValue(fieldMap.get("filterLabel")),
+                stringValue(fieldMap.get("LIST_FILTER_LABEL")),
+                stringValue(fieldMap.get("title")),
+                id
+        ));
+        view.put("type", firstNonBlank(
+                stringValue(fieldMap.get("type")),
+                stringValue(fieldMap.get("USER_TYPE_ID")),
+                stringValue(fieldMap.get("userTypeId")),
+                ""
+        ));
+        return view;
     }
 
     private Map<String, Object> safeCall(BitrixPortal portal, String method, Map<String, ?> params) {
@@ -169,5 +261,35 @@ public class BitrixSetupService {
 
     private String nullToEmpty(String value) {
         return value == null ? "" : value;
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private String stringValue(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Object ru = map.get("ru");
+            if (ru != null && !String.valueOf(ru).isBlank()) {
+                return String.valueOf(ru);
+            }
+        }
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private record FieldCheck(boolean exists, Map<String, Object> exact, List<Map<String, Object>> matchesByLabel, String error) {
+        Map<String, Object> toMap() {
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("exists", exists);
+            result.put("exact", exact);
+            result.put("matchesByLabel", matchesByLabel);
+            result.put("error", error);
+            return result;
+        }
     }
 }
