@@ -6,6 +6,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public record AppProperties(
         String baseUrl,
         String name,
-        String version
+        String version,
+        String bitrixClientId,
+        String bitrixClientSecret,
+        String bitrixTokenEndpoint
 ) {
 }

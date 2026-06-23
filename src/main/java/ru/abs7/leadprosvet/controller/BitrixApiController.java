@@ -2,6 +2,7 @@ package ru.abs7.leadprosvet.controller;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -54,17 +55,35 @@ public class BitrixApiController {
     }
 
     @GetMapping({"/lead-fields", "/contact-fields"})
-    public ResponseEntity<List<Map<String, String>>> leadFields() {
+    public ResponseEntity<?> leadFields() {
         try {
             BitrixPortal portal = bitrixPortalService.currentPortalOrThrow();
             List<Map<String, String>> fields = loadLeadFields(portal);
-            if (!fields.isEmpty()) {
-                return ResponseEntity.ok(fields);
-            }
+            return ResponseEntity.ok(fields);
         } catch (RuntimeException e) {
-            log.warn("Cannot load real Bitrix lead fields, using fallback: {}", e.getMessage());
+            log.warn("Cannot load real Bitrix lead fields: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(Map.of(
+                    "ok", false,
+                    "error", e.getMessage(),
+                    "endpoint", "/api/bitrix/lead-fields",
+                    "reason", "Не удалось загрузить реальные поля лида из Bitrix24. Fallback больше не отдаётся, чтобы не показывать фейковые поля."
+            ));
         }
-        return ResponseEntity.ok(fallbackLeadFields());
+    }
+
+    @GetMapping("/token/refresh")
+    public ResponseEntity<Map<String, Object>> refreshToken() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        try {
+            BitrixPortal portal = bitrixPortalService.currentPortalOrThrow();
+            result.put("ok", true);
+            result.put("refresh", bitrixRestClient.refreshAccessToken(portal));
+            result.put("portal", portalView(portal));
+        } catch (RuntimeException e) {
+            result.put("ok", false);
+            result.put("error", e.getMessage());
+        }
+        return ResponseEntity.ok(result);
     }
 
     private Map<String, Object> leadFieldsSummary(BitrixPortal portal) {

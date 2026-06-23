@@ -8,19 +8,28 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Controller;
 import org.springframework.util.StreamUtils;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
+import ru.abs7.leadprosvet.service.BitrixInstallService;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 @Controller
 public class PageController {
 
     private static final Logger log = LoggerFactory.getLogger(PageController.class);
 
+    private final BitrixInstallService bitrixInstallService;
     private volatile String cachedIndexHtml;
+
+    public PageController(BitrixInstallService bitrixInstallService) {
+        this.bitrixInstallService = bitrixInstallService;
+    }
 
     @RequestMapping(
             value = {"/", "/bitrix/app", "/bitrix/settings"},
@@ -28,9 +37,14 @@ public class PageController {
             produces = MediaType.TEXT_HTML_VALUE
     )
     @ResponseBody
-    public String app(HttpServletRequest request) {
+    public String app(
+            @RequestParam Map<String, String> params,
+            @RequestBody(required = false) String body,
+            HttpServletRequest request
+    ) {
         log.debug("Serving LeadProsvet UI: method={}, uri={}, remote={}",
                 request.getMethod(), request.getRequestURI(), request.getRemoteAddr());
+        saveBitrixRuntimeAuthIfPresent(params, body, request);
         return indexHtml();
     }
 
@@ -38,6 +52,44 @@ public class PageController {
     @ResponseBody
     public String healthz() {
         return "OK";
+    }
+
+    private void saveBitrixRuntimeAuthIfPresent(Map<String, String> params, String body, HttpServletRequest request) {
+        if (!looksLikeBitrixAuth(params, body)) {
+            return;
+        }
+        try {
+            bitrixInstallService.saveInstallPayload(params, body);
+            log.info("Saved fresh Bitrix runtime auth from {} {}", request.getMethod(), request.getRequestURI());
+        } catch (RuntimeException e) {
+            log.warn("Cannot save Bitrix runtime auth from {} {}: {}", request.getMethod(), request.getRequestURI(), e.getMessage());
+        }
+    }
+
+    private boolean looksLikeBitrixAuth(Map<String, String> params, String body) {
+        if (params != null) {
+            for (String key : params.keySet()) {
+                String lower = key == null ? "" : key.toLowerCase();
+                if (lower.contains("auth_id")
+                        || lower.contains("refresh_id")
+                        || lower.contains("access_token")
+                        || lower.contains("refresh_token")
+                        || lower.contains("client_endpoint")
+                        || lower.contains("server_endpoint")) {
+                    return true;
+                }
+            }
+        }
+        if (body == null || body.isBlank()) {
+            return false;
+        }
+        String lowerBody = body.toLowerCase();
+        return lowerBody.contains("auth_id=")
+                || lowerBody.contains("refresh_id=")
+                || lowerBody.contains("access_token=")
+                || lowerBody.contains("refresh_token=")
+                || lowerBody.contains("client_endpoint=")
+                || lowerBody.contains("server_endpoint=");
     }
 
     private String indexHtml() {

@@ -105,11 +105,20 @@ function bindButtons() {
 
 async function loadFields() {
   try {
-    const response = await fetch('/api/bitrix/lead-fields');
-    state.fields = await response.json();
+    const response = await fetch('/api/bitrix/lead-fields', { cache: 'no-store' });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.error || `HTTP ${response.status}`);
+    }
+    if (!Array.isArray(payload)) {
+      throw new Error(payload?.error || 'Bitrix вернул не список полей');
+    }
+    state.fields = payload;
     renderFields();
   } catch (error) {
-    showToast('Не удалось загрузить поля лида: ' + error.message);
+    state.fields = [];
+    renderFields();
+    showToast('Не удалось загрузить реальные поля лида из Bitrix24: ' + error.message);
   }
 }
 
