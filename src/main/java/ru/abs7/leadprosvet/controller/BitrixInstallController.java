@@ -57,6 +57,7 @@ public class BitrixInstallController {
                     <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
                     <title>ЛидПросвет — установка</title>
                     <link rel=\"stylesheet\" href=\"/css/app.css\">
+                    <script src=\"https://api.bitrix24.com/api/v1/\"></script>
                 </head>
                 <body>
                 <div class=\"install-page\">
@@ -65,9 +66,28 @@ public class BitrixInstallController {
                         <h1>ЛидПросвет</h1>
                         <p>Данные установки Bitrix24 приняты и сохранены.</p>
                         <p class=\"muted\">Метод: <strong>%s</strong>. Портал: <strong>%s</strong>.</p>
+                        <div class=\"install-meta\" id=\"installStatus\">Завершаю установку в Bitrix24…</div>
                         <div class=\"install-meta\">%s · %s</div>
                     </div>
                 </div>
+                <script>
+                    (function () {
+                        const status = document.getElementById('installStatus');
+                        function done(text) { if (status) status.textContent = text; }
+                        try {
+                            if (window.BX24 && BX24.init && BX24.installFinish) {
+                                BX24.init(function () {
+                                    BX24.installFinish();
+                                    done('Установка завершена. Можно закрыть это окно.');
+                                });
+                            } else {
+                                done('Данные сохранены. BX24.installFinish недоступен на этой странице.');
+                            }
+                        } catch (e) {
+                            done('Данные сохранены. installFinish не выполнен: ' + e.message);
+                        }
+                    })();
+                </script>
                 </body>
                 </html>
                 """.formatted(method, domain, appProperties.baseUrl(), OffsetDateTime.now());
