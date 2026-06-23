@@ -1,7 +1,7 @@
 package ru.abs7.leadprosvet.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.abs7.leadprosvet.domain.AppSetting;
@@ -45,7 +45,7 @@ public class JsonStorageService {
     private String toJson(Object payload) {
         try {
             return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(payload);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new IllegalArgumentException("Cannot serialize setting payload", e);
         }
     }
@@ -58,7 +58,7 @@ public class JsonStorageService {
                 return (Map<String, Object>) map;
             }
             return new LinkedHashMap<>();
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             return new LinkedHashMap<>();
         }
     }

@@ -58,7 +58,7 @@ public class BitrixPortal {
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt;
 
-    protected BitrixPortal() {
+    public BitrixPortal() {
     }
 
     public Long getId() {
