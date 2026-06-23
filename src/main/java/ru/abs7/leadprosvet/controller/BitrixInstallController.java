@@ -10,6 +10,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import ru.abs7.leadprosvet.config.AppProperties;
+import ru.abs7.leadprosvet.domain.BitrixPortal;
+import ru.abs7.leadprosvet.service.BitrixInstallService;
 
 import java.time.OffsetDateTime;
 import java.util.Map;
@@ -18,16 +20,20 @@ import java.util.Map;
 public class BitrixInstallController {
 
     private static final Logger log = LoggerFactory.getLogger(BitrixInstallController.class);
-    private final AppProperties appProperties;
 
-    public BitrixInstallController(AppProperties appProperties) {
+    private final AppProperties appProperties;
+    private final BitrixInstallService bitrixInstallService;
+
+    public BitrixInstallController(AppProperties appProperties, BitrixInstallService bitrixInstallService) {
         this.appProperties = appProperties;
+        this.bitrixInstallService = bitrixInstallService;
     }
 
     @GetMapping(value = "/bitrix/install", produces = MediaType.TEXT_HTML_VALUE)
     public String installGet(@RequestParam Map<String, String> params, HttpServletRequest request) {
         log.info("Bitrix install GET from ip={}, params={}", request.getRemoteAddr(), safeParams(params));
-        return installHtml("GET");
+        BitrixPortal portal = bitrixInstallService.saveInstallPayload(params, null);
+        return installHtml("GET", portal);
     }
 
     @PostMapping(value = "/bitrix/install", consumes = MediaType.ALL_VALUE, produces = MediaType.TEXT_HTML_VALUE)
@@ -37,10 +43,12 @@ public class BitrixInstallController {
             HttpServletRequest request
     ) {
         log.info("Bitrix install POST from ip={}, params={}, body={}", request.getRemoteAddr(), safeParams(params), safeBody(body));
-        return installHtml("POST");
+        BitrixPortal portal = bitrixInstallService.saveInstallPayload(params, body);
+        return installHtml("POST", portal);
     }
 
-    private String installHtml(String method) {
+    private String installHtml(String method, BitrixPortal portal) {
+        String domain = portal.getDomain() == null ? "не определён" : portal.getDomain();
         return """
                 <!doctype html>
                 <html lang=\"ru\">
@@ -55,16 +63,15 @@ public class BitrixInstallController {
                     <div class=\"install-card\">
                         <img class=\"install-logo\" src=\"/logoHorizontal.png\" alt=\"ЛидПросвет\" onerror=\"this.style.display='none'\">
                         <h1>ЛидПросвет</h1>
-                        <p>Endpoint установки доступен. Метод: <strong>%s</strong>.</p>
-                        <p class=\"muted\">Следующим этапом здесь будет сохранение OAuth-данных и завершение установки Bitrix24-приложения.</p>
+                        <p>Данные установки Bitrix24 приняты и сохранены.</p>
+                        <p class=\"muted\">Метод: <strong>%s</strong>. Портал: <strong>%s</strong>.</p>
                         <div class=\"install-meta\">%s · %s</div>
                     </div>
                 </div>
                 </body>
                 </html>
-                """.formatted(method, appProperties.baseUrl(), OffsetDateTime.now());
+                """.formatted(method, domain, appProperties.baseUrl(), OffsetDateTime.now());
     }
-
 
     private Map<String, String> safeParams(Map<String, String> params) {
         if (params == null || params.isEmpty()) {

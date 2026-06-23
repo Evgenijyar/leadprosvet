@@ -9,6 +9,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import ru.abs7.leadprosvet.domain.IncomingBitrixEvent;
+import ru.abs7.leadprosvet.service.BitrixEventLogService;
 
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
@@ -19,6 +21,12 @@ public class BitrixEventController {
 
     private static final Logger log = LoggerFactory.getLogger(BitrixEventController.class);
 
+    private final BitrixEventLogService bitrixEventLogService;
+
+    public BitrixEventController(BitrixEventLogService bitrixEventLogService) {
+        this.bitrixEventLogService = bitrixEventLogService;
+    }
+
     @PostMapping(value = {"/api/bitrix/events", "/api/bitrix/events/lead-add"}, consumes = MediaType.ALL_VALUE)
     public ResponseEntity<Map<String, Object>> receiveEvent(
             @RequestParam Map<String, String> params,
@@ -27,10 +35,13 @@ public class BitrixEventController {
     ) {
         log.info("Bitrix event received: ip={}, params={}, body={}", request.getRemoteAddr(), safeParams(params), safeBody(body));
 
+        IncomingBitrixEvent event = bitrixEventLogService.saveIncomingEvent(params, body, request.getRemoteAddr());
+
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("ok", true);
         response.put("status", "accepted");
-        response.put("message", "Bitrix event received by LeadProsvet skeleton");
+        response.put("eventLogId", event.getId());
+        response.put("message", "Bitrix event saved by LeadProsvet");
         response.put("serverTime", OffsetDateTime.now().toString());
         return ResponseEntity.ok(response);
     }
