@@ -44,28 +44,33 @@ public class BitrixApiController {
                 "skipped", true,
                 "reason", "user.current не вызывается: у локального приложения может не быть user-scope, для нас достаточно user.admin"
         ));
-        response.put("contactFields", contactFieldsSummary(portal));
+        response.put("leadFields", leadFieldsSummary(portal));
+        response.put("contactFields", Map.of(
+                "ok", false,
+                "skipped", true,
+                "reason", "ЛидПросвет теперь работает с полями лида, а не контакта"
+        ));
         return ResponseEntity.ok(response);
     }
 
-    @GetMapping("/contact-fields")
-    public ResponseEntity<List<Map<String, String>>> contactFields() {
+    @GetMapping({"/lead-fields", "/contact-fields"})
+    public ResponseEntity<List<Map<String, String>>> leadFields() {
         try {
             BitrixPortal portal = bitrixPortalService.currentPortalOrThrow();
-            List<Map<String, String>> fields = loadContactFields(portal);
+            List<Map<String, String>> fields = loadLeadFields(portal);
             if (!fields.isEmpty()) {
                 return ResponseEntity.ok(fields);
             }
         } catch (RuntimeException e) {
-            log.warn("Cannot load real Bitrix contact fields, using fallback: {}", e.getMessage());
+            log.warn("Cannot load real Bitrix lead fields, using fallback: {}", e.getMessage());
         }
-        return ResponseEntity.ok(fallbackContactFields());
+        return ResponseEntity.ok(fallbackLeadFields());
     }
 
-    private Map<String, Object> contactFieldsSummary(BitrixPortal portal) {
+    private Map<String, Object> leadFieldsSummary(BitrixPortal portal) {
         Map<String, Object> result = new LinkedHashMap<>();
         try {
-            List<Map<String, String>> fields = loadContactFields(portal);
+            List<Map<String, String>> fields = loadLeadFields(portal);
             result.put("ok", true);
             result.put("count", fields.size());
             result.put("sample", fields.stream().limit(12).toList());
@@ -76,9 +81,8 @@ public class BitrixApiController {
         return result;
     }
 
-    @SuppressWarnings("unchecked")
-    private List<Map<String, String>> loadContactFields(BitrixPortal portal) {
-        Map<String, Object> payload = bitrixRestClient.call(portal, "crm.contact.fields");
+    private List<Map<String, String>> loadLeadFields(BitrixPortal portal) {
+        Map<String, Object> payload = bitrixRestClient.call(portal, "crm.lead.fields");
         Object result = payload.get("result");
         if (!(result instanceof Map<?, ?> resultMap)) {
             return List.of();
@@ -88,7 +92,7 @@ public class BitrixApiController {
         resultMap.forEach((idObject, fieldObject) -> {
             String id = String.valueOf(idObject);
             if (!(fieldObject instanceof Map<?, ?> fieldMap)) {
-                fields.add(field(id, id, "Контакт"));
+                fields.add(field(id, id, "Лид"));
                 return;
             }
             String label = firstNonBlank(
@@ -99,7 +103,7 @@ public class BitrixApiController {
                     id
             );
             String type = firstNonBlank(stringValue(fieldMap.get("type")), stringValue(fieldMap.get("userTypeId")), "field");
-            String group = id.startsWith("UF_") ? "Пользовательское поле" : "Контакт · " + type;
+            String group = id.startsWith("UF_") ? "Пользовательское поле лида" : "Лид · " + type;
             fields.add(field(id, label, group));
         });
 
@@ -140,19 +144,20 @@ public class BitrixApiController {
         return map;
     }
 
-    private List<Map<String, String>> fallbackContactFields() {
+    private List<Map<String, String>> fallbackLeadFields() {
         return List.of(
-                field("NAME", "Имя", "Контакт"),
-                field("LAST_NAME", "Фамилия", "Контакт"),
-                field("COMPANY_TITLE", "Компания", "Лид / Контакт"),
-                field("PHONE", "Телефон", "Контакт"),
-                field("EMAIL", "Email", "Контакт"),
-                field("WEB", "Сайт", "Контакт"),
-                field("ADDRESS", "Адрес", "Контакт"),
-                field("UF_CRM_INN", "ИНН", "Пользовательское поле"),
-                field("UF_CRM_ACTIVITY", "Сфера деятельности", "Пользовательское поле"),
-                field("COMMENTS", "Комментарии", "Лид"),
-                field("SOURCE_DESCRIPTION", "Описание источника", "Лид")
+                field("ID", "ID лида", "Лид"),
+                field("TITLE", "Название лида", "Лид"),
+                field("NAME", "Имя", "Лид"),
+                field("LAST_NAME", "Фамилия", "Лид"),
+                field("COMPANY_TITLE", "Название компании", "Лид"),
+                field("PHONE", "Телефон", "Лид"),
+                field("EMAIL", "Email", "Лид"),
+                field("WEB", "Сайт", "Лид"),
+                field("STATUS_ID", "Стадия", "Лид"),
+                field("COMMENTS", "Комментарий", "Лид"),
+                field("SOURCE_DESCRIPTION", "Дополнительно об источнике", "Лид"),
+                field("UF_CRM_LP_AI_INFO", "[ТЕХ.ПОЛЕ] ЛидПросвет", "Пользовательское поле лида")
         );
     }
 

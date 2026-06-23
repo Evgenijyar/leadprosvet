@@ -26,12 +26,12 @@ public class BitrixSetupController {
 
     @GetMapping("/create-ai-field")
     public ResponseEntity<Map<String, Object>> createAiFieldGet() {
-        return ResponseEntity.ok(bitrixSetupService.createAiContactField());
+        return ResponseEntity.ok(bitrixSetupService.createAiLeadField());
     }
 
     @PostMapping("/create-ai-field")
     public ResponseEntity<Map<String, Object>> createAiFieldPost() {
-        return ResponseEntity.ok(bitrixSetupService.createAiContactField());
+        return ResponseEntity.ok(bitrixSetupService.createAiLeadField());
     }
 
     @GetMapping("/bind-lead-event")

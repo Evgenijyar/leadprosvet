@@ -38,16 +38,21 @@ public class BitrixSetupService {
 
     public Map<String, Object> status() {
         BitrixPortal portal = bitrixPortalService.currentPortalOrThrow();
-        FieldCheck fieldCheck = checkAiField(portal);
+        FieldCheck fieldCheck = checkAiLeadField(portal);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ok", true);
         result.put("portalDomain", nullToEmpty(portal.getDomain()));
         result.put("baseUrl", appProperties.baseUrl());
+        result.put("crmEntity", "lead");
+        result.put("fieldsRestMethod", "crm.lead.fields");
+        result.put("userFieldCreateRestMethod", "crm.lead.userfield.add");
+        result.put("leadFieldsEndpoint", "/api/bitrix/lead-fields");
         result.put("leadAddEvent", LEAD_ADD_EVENT);
         result.put("leadAddHandler", leadAddHandlerUrl());
         result.put("aiFieldId", AI_FIELD_ID);
         result.put("aiFieldLabel", AI_FIELD_LABEL);
+        result.put("aiFieldTargetEntity", "lead");
         result.put("aiFieldExists", fieldCheck.exists());
         result.put("aiFieldExact", fieldCheck.exact());
         result.put("aiFieldMatchesByLabel", fieldCheck.matchesByLabel());
@@ -59,25 +64,26 @@ public class BitrixSetupService {
     public Map<String, Object> runInitialSetup() {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ok", true);
-        result.put("createAiContactField", createAiContactField());
+        result.put("createAiLeadField", createAiLeadField());
         result.put("bindLeadAddEvent", bindLeadAddEvent());
         result.put("status", status());
         return result;
     }
 
-    public Map<String, Object> createAiContactField() {
+    public Map<String, Object> createAiLeadField() {
         BitrixPortal portal = bitrixPortalService.currentPortalOrThrow();
         Map<String, Object> result = new LinkedHashMap<>();
+        result.put("entity", "lead");
         result.put("fieldId", AI_FIELD_ID);
         result.put("fieldShortName", AI_FIELD_SHORT_NAME);
         result.put("fieldLabel", AI_FIELD_LABEL);
 
-        FieldCheck before = checkAiField(portal);
+        FieldCheck before = checkAiLeadField(portal);
         result.put("before", before.toMap());
         if (before.exists()) {
             result.put("ok", true);
             result.put("alreadyExists", true);
-            result.put("message", "Поле уже существует");
+            result.put("message", "Поле лида уже существует");
             return result;
         }
 
@@ -98,20 +104,21 @@ public class BitrixSetupService {
         fields.put("SETTINGS", Map.of("ROWS", 18));
 
         try {
-            Map<String, Object> payload = bitrixRestClient.call(portal, "crm.contact.userfield.add", Map.of("fields", fields));
-            FieldCheck after = checkAiField(portal);
+            Map<String, Object> payload = bitrixRestClient.call(portal, "crm.lead.userfield.add", Map.of("fields", fields));
+            FieldCheck after = checkAiLeadField(portal);
             result.put("ok", after.exists());
             result.put("alreadyExists", false);
+            result.put("restMethod", "crm.lead.userfield.add");
             result.put("restResult", payload.get("result"));
             result.put("after", after.toMap());
             if (!after.exists()) {
-                result.put("warning", "Bitrix вернул успешный ответ, но поле пока не найдено в crm.contact.fields. Проверь /api/bitrix/setup/status через 5-10 секунд.");
+                result.put("warning", "Bitrix вернул успешный ответ, но поле пока не найдено в crm.lead.fields. Проверь /api/bitrix/setup/status через 5-10 секунд.");
             }
-            log.info("Bitrix contact user field {} create call completed for portal {}. Exists after call: {}", AI_FIELD_ID, portal.getDomain(), after.exists());
+            log.info("Bitrix lead user field {} create call completed for portal {}. Exists after call: {}", AI_FIELD_ID, portal.getDomain(), after.exists());
         } catch (RuntimeException e) {
             result.put("ok", false);
             result.put("error", e.getMessage());
-            log.warn("Cannot create Bitrix contact user field {} for portal {}: {}", AI_FIELD_ID, portal.getDomain(), e.getMessage());
+            log.warn("Cannot create Bitrix lead user field {} for portal {}: {}", AI_FIELD_ID, portal.getDomain(), e.getMessage());
         }
         return result;
     }
@@ -143,13 +150,13 @@ public class BitrixSetupService {
         return result;
     }
 
-    private FieldCheck checkAiField(BitrixPortal portal) {
+    private FieldCheck checkAiLeadField(BitrixPortal portal) {
         Map<String, Object> exact = null;
         List<Map<String, Object>> matchesByLabel = new ArrayList<>();
         String error = "";
 
         try {
-            Map<String, Object> payload = bitrixRestClient.call(portal, "crm.contact.fields");
+            Map<String, Object> payload = bitrixRestClient.call(portal, "crm.lead.fields");
             Object rawResult = payload.get("result");
             if (rawResult instanceof Map<?, ?> fields) {
                 for (Map.Entry<?, ?> entry : fields.entrySet()) {
@@ -169,12 +176,12 @@ public class BitrixSetupService {
             }
         } catch (RuntimeException e) {
             error = e.getMessage();
-            log.warn("Cannot check Bitrix AI field existence through crm.contact.fields: {}", error);
+            log.warn("Cannot check Bitrix AI lead field existence through crm.lead.fields: {}", error);
         }
 
         if (exact == null) {
             try {
-                Map<String, Object> payload = bitrixRestClient.call(portal, "crm.contact.userfield.list");
+                Map<String, Object> payload = bitrixRestClient.call(portal, "crm.lead.userfield.list");
                 Object rawResult = payload.get("result");
                 if (rawResult instanceof Iterable<?> items) {
                     for (Object item : items) {
@@ -200,9 +207,9 @@ public class BitrixSetupService {
                 if (error.isBlank()) {
                     error = e.getMessage();
                 } else {
-                    error = error + " | crm.contact.userfield.list: " + e.getMessage();
+                    error = error + " | crm.lead.userfield.list: " + e.getMessage();
                 }
-                log.warn("Cannot check Bitrix AI field existence through crm.contact.userfield.list: {}", e.getMessage());
+                log.warn("Cannot check Bitrix AI lead field existence through crm.lead.userfield.list: {}", e.getMessage());
             }
         }
 

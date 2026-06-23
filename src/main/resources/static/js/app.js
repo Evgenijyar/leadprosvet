@@ -105,11 +105,11 @@ function bindButtons() {
 
 async function loadFields() {
   try {
-    const response = await fetch('/api/bitrix/contact-fields');
+    const response = await fetch('/api/bitrix/lead-fields');
     state.fields = await response.json();
     renderFields();
   } catch (error) {
-    showToast('Не удалось загрузить поля контакта: ' + error.message);
+    showToast('Не удалось загрузить поля лида: ' + error.message);
   }
 }
 
