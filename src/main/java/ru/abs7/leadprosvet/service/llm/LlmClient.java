@@ -83,7 +83,7 @@ public class LlmClient {
         log.info("LLM endpoint: {}", maskUrl(resolvedEndpoint));
         log.info("LLM model: {}", model);
         if (provider.equals("google")) {
-            log.info("LLM Google Search grounding enabled: true");
+            log.info("LLM Google Search grounding enabled: true; thinkingLevel=HIGH; endpointApi=generateContent");
         } else {
             log.info("LLM OpenAI-compatible web_search tool enabled: true");
         }
@@ -196,17 +196,35 @@ public class LlmClient {
     }
 
     private Map<String, Object> googlePayload(String prompt) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))));
+        Map<String, Object> part = new LinkedHashMap<>();
+        part.put("text", prompt);
 
-        // Grounding with Google Search for Gemini API generateContent.
-        // Official REST shape:
+        Map<String, Object> content = new LinkedHashMap<>();
+        content.put("role", "user");
+        content.put("parts", List.of(part));
+
+        Map<String, Object> thinkingConfig = new LinkedHashMap<>();
+        thinkingConfig.put("thinkingLevel", "HIGH");
+
+        Map<String, Object> generationConfig = new LinkedHashMap<>();
+        generationConfig.put("thinkingConfig", thinkingConfig);
+
+        Map<String, Object> googleSearchTool = new LinkedHashMap<>();
+        googleSearchTool.put("googleSearch", new LinkedHashMap<>());
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("contents", List.of(content));
+        payload.put("generationConfig", generationConfig);
+
+        // Grounding with Google Search for the Google Gemini/Gemma API.
+        // Wire shape intentionally mirrors the Google AI Studio curl export used by the project:
         // {
-        //   "contents": [{"parts": [{"text": "..."}]}],
-        //   "tools": [{"google_search": {}}]
+        //   "contents": [{"role":"user", "parts": [{"text": "..."}]}],
+        //   "generationConfig": {"thinkingConfig": {"thinkingLevel": "HIGH"}},
+        //   "tools": [{"googleSearch": {}}]
         // }
-        // This is not a prompt instruction. This is the actual tool switch in the JSON request.
-        payload.put("tools", List.of(Map.of("google_search", Map.of())));
+        // This branch is Google-only. OpenAI-compatible gateways use their own web_search tool format.
+        payload.put("tools", List.of(googleSearchTool));
 
         return payload;
     }
@@ -215,24 +233,94 @@ public class LlmClient {
     private String extractText(String provider, String responseBody) {
         try {
             Object parsed = objectMapper.readValue(responseBody, Object.class);
+            if (provider.equals("google")) {
+                return extractGoogleFinalTextFromParsed(parsed);
+            }
+
             if (!(parsed instanceof Map<?, ?> root)) {
                 return null;
             }
-            if (provider.equals("google")) {
-                return extractGoogleFinalText(root);
-            } else {
-                Object choices = root.get("choices");
-                if (choices instanceof List<?> list && !list.isEmpty() && list.getFirst() instanceof Map<?, ?> choice) {
-                    Object message = choice.get("message");
-                    if (message instanceof Map<?, ?> messageMap) {
-                        return stringValue(messageMap.get("content"));
-                    }
+
+            Object choices = root.get("choices");
+            if (choices instanceof List<?> list && !list.isEmpty() && list.getFirst() instanceof Map<?, ?> choice) {
+                Object message = choice.get("message");
+                if (message instanceof Map<?, ?> messageMap) {
+                    return stringValue(messageMap.get("content"));
                 }
             }
             return null;
         } catch (JacksonException e) {
+            if (provider.equals("google")) {
+                String textFromSse = extractGoogleFinalTextFromSse(responseBody);
+                if (textFromSse != null && !textFromSse.isBlank()) {
+                    return textFromSse;
+                }
+            }
             throw new IllegalStateException("Cannot parse LLM response JSON: " + e.getMessage(), e);
         }
+    }
+
+
+    private String extractGoogleFinalTextFromSse(String responseBody) {
+        if (responseBody == null || !responseBody.contains("data:")) {
+            return null;
+        }
+
+        StringBuilder combined = new StringBuilder();
+        for (String line : responseBody.split("\\R")) {
+            String trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) {
+                continue;
+            }
+
+            String json = trimmed.substring("data:".length()).trim();
+            if (json.isBlank() || "[DONE]".equals(json)) {
+                continue;
+            }
+
+            try {
+                Object parsedChunk = objectMapper.readValue(json, Object.class);
+                String chunkText = extractGoogleFinalTextFromParsed(parsedChunk);
+                if (chunkText == null || chunkText.isBlank()) {
+                    continue;
+                }
+                if (!combined.isEmpty()) {
+                    combined.append("\n\n");
+                }
+                combined.append(chunkText.trim());
+            } catch (JacksonException ignored) {
+                log.warn("Cannot parse one Google stream chunk as JSON");
+            }
+        }
+
+        return combined.isEmpty() ? null : combined.toString();
+    }
+
+
+    private String extractGoogleFinalTextFromParsed(Object parsed) {
+        if (parsed instanceof Map<?, ?> root) {
+            return extractGoogleFinalText(root);
+        }
+
+        if (parsed instanceof List<?> chunks) {
+            StringBuilder combined = new StringBuilder();
+            for (Object chunk : chunks) {
+                if (!(chunk instanceof Map<?, ?> chunkMap)) {
+                    continue;
+                }
+                String chunkText = extractGoogleFinalText(chunkMap);
+                if (chunkText == null || chunkText.isBlank()) {
+                    continue;
+                }
+                if (!combined.isEmpty()) {
+                    combined.append("\n\n");
+                }
+                combined.append(chunkText.trim());
+            }
+            return combined.isEmpty() ? null : combined.toString();
+        }
+
+        return null;
     }
 
 
@@ -304,6 +392,10 @@ public class LlmClient {
 
         if (value.contains(":generateContent")) {
             return value;
+        }
+
+        if (value.contains(":streamGenerateContent")) {
+            return value.replace(":streamGenerateContent", ":generateContent");
         }
 
         String query = "";
