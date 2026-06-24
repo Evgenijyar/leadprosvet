@@ -95,13 +95,14 @@ public class LlmClient {
             log.info("==================== LLM RESPONSE END ====================");
 
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                throw new IllegalStateException("LLM HTTP " + response.statusCode() + ": " + responseBody);
+                throw new LlmHttpException(response.statusCode(), requestJson, responseBody);
             }
 
             String text = extractText(provider, responseBody);
             if (text == null || text.isBlank()) {
-                throw new IllegalStateException("LLM response has no generated text: " + responseBody);
+                throw new IllegalStateException("LLM response has no generated non-thought text: " + responseBody);
             }
+            log.info("LLM extracted final text FULL:\n{}", text.trim());
             return new LlmResult(provider, model, maskUrl(resolvedEndpoint), requestJson, responseBody, text.trim());
         } catch (IOException e) {
             throw new IllegalStateException("LLM IO error: " + e.getMessage(), e);
@@ -158,16 +159,7 @@ public class LlmClient {
                 return null;
             }
             if (provider.equals("google")) {
-                Object candidates = root.get("candidates");
-                if (candidates instanceof List<?> list && !list.isEmpty() && list.getFirst() instanceof Map<?, ?> candidate) {
-                    Object content = candidate.get("content");
-                    if (content instanceof Map<?, ?> contentMap) {
-                        Object parts = contentMap.get("parts");
-                        if (parts instanceof List<?> partList && !partList.isEmpty() && partList.getFirst() instanceof Map<?, ?> part) {
-                            return stringValue(part.get("text"));
-                        }
-                    }
-                }
+                return extractGoogleFinalText(root);
             } else {
                 Object choices = root.get("choices");
                 if (choices instanceof List<?> list && !list.isEmpty() && list.getFirst() instanceof Map<?, ?> choice) {
@@ -181,6 +173,61 @@ public class LlmClient {
         } catch (JacksonException e) {
             throw new IllegalStateException("Cannot parse LLM response JSON: " + e.getMessage(), e);
         }
+    }
+
+
+    private String extractGoogleFinalText(Map<?, ?> root) {
+        Object candidates = root.get("candidates");
+        if (!(candidates instanceof List<?> candidateList) || candidateList.isEmpty()) {
+            return null;
+        }
+
+        StringBuilder finalText = new StringBuilder();
+
+        for (Object candidateObject : candidateList) {
+            if (!(candidateObject instanceof Map<?, ?> candidate)) {
+                continue;
+            }
+            Object content = candidate.get("content");
+            if (!(content instanceof Map<?, ?> contentMap)) {
+                continue;
+            }
+            Object parts = contentMap.get("parts");
+            if (!(parts instanceof List<?> partList)) {
+                continue;
+            }
+
+            for (Object partObject : partList) {
+                if (!(partObject instanceof Map<?, ?> part)) {
+                    continue;
+                }
+
+                if (isGoogleThoughtPart(part)) {
+                    log.info("LLM Google response part skipped because thought=true");
+                    continue;
+                }
+
+                String text = stringValue(part.get("text"));
+                if (text == null || text.isBlank()) {
+                    continue;
+                }
+
+                if (!finalText.isEmpty()) {
+                    finalText.append("\n\n");
+                }
+                finalText.append(text.trim());
+            }
+        }
+
+        return finalText.isEmpty() ? null : finalText.toString();
+    }
+
+    private boolean isGoogleThoughtPart(Map<?, ?> part) {
+        Object thought = part.get("thought");
+        if (thought instanceof Boolean bool) {
+            return bool;
+        }
+        return thought != null && "true".equalsIgnoreCase(String.valueOf(thought).trim());
     }
 
     private String defaultEndpoint(String provider) {
@@ -247,6 +294,35 @@ public class LlmClient {
             return "";
         }
         return url.replaceAll("(?i)([?&]key=)[^&]+", "$1***");
+    }
+
+    public static class LlmHttpException extends IllegalStateException {
+        private final int statusCode;
+        private final String requestJson;
+        private final String responseBody;
+
+        public LlmHttpException(int statusCode, String requestJson, String responseBody) {
+            super("LLM HTTP " + statusCode + ": " + responseBody);
+            this.statusCode = statusCode;
+            this.requestJson = requestJson;
+            this.responseBody = responseBody == null ? "" : responseBody;
+        }
+
+        public int statusCode() {
+            return statusCode;
+        }
+
+        public String requestJson() {
+            return requestJson;
+        }
+
+        public String responseBody() {
+            return responseBody;
+        }
+
+        public boolean retryable() {
+            return statusCode == 408 || statusCode == 429 || statusCode >= 500;
+        }
     }
 
     public record LlmResult(
