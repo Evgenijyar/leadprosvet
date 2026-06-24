@@ -2,7 +2,19 @@ const state = {
   fields: [],
   provider: 'openai',
   drag: null,
-  serviceEnabled: true
+  serviceEnabled: true,
+  llmProfiles: {
+    openai: {
+      endpointUrl: 'https://api.openai.com/v1/chat/completions',
+      modelId: 'gpt-4.1-mini',
+      apiKey: ''
+    },
+    google: {
+      endpointUrl: 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
+      modelId: 'gemini-2.5-flash',
+      apiKey: ''
+    }
+  }
 };
 
 const defaultPromptHtml = `
@@ -89,18 +101,16 @@ async function saveServiceEnabled(enabled) {
 function bindProviderSwitch() {
   document.querySelectorAll('.provider-button').forEach(button => {
     button.addEventListener('click', () => {
-      document.querySelectorAll('.provider-button').forEach(b => b.classList.remove('active'));
-      button.classList.add('active');
-      state.provider = button.dataset.provider;
-      const endpoint = document.getElementById('endpointUrl');
-      const model = document.getElementById('modelId');
-      if (state.provider === 'google') {
-        endpoint.value = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent';
-        model.value = 'gemini-2.5-flash';
-      } else {
-        endpoint.value = 'https://api.openai.com/v1/chat/completions';
-        model.value = 'gpt-4.1-mini';
-      }
+      const nextProvider = normalizeProvider(button.dataset.provider);
+      if (nextProvider === state.provider) return;
+
+      saveCurrentProviderFormToState();
+      state.provider = nextProvider;
+      updateProviderButtons();
+      fillProviderFormFromState();
+      showToast(state.provider === 'google'
+        ? 'Загружены сохранённые настройки Google API'
+        : 'Загружены сохранённые настройки OpenAPI');
     });
   });
 }
@@ -386,10 +396,9 @@ async function loadCurrentSettings() {
 
     setLeadTriggerEvent(settings.leadTriggerEvent || 'ONCRMLEADADD');
 
-    const llm = settings.llm || {};
-    setValue('endpointUrl', llm.endpointUrl);
-    setValue('modelId', llm.modelId);
-    setValue('apiKey', llm.apiKey);
+    loadProviderProfilesFromSettings(settings);
+    updateProviderButtons();
+    fillProviderFormFromState();
 
     const proxy = settings.proxy || {};
     const useProxy = document.getElementById('useProxy');
@@ -404,6 +413,118 @@ async function loadCurrentSettings() {
   } catch (error) {
     console.warn('Settings load failed', error);
   }
+}
+
+
+function loadProviderProfilesFromSettings(settings) {
+  const savedProfiles = settings.llmProfiles || settings.llmByProvider || {};
+
+  ['openai', 'google'].forEach(provider => {
+    const saved = savedProfiles[provider] || {};
+    state.llmProfiles[provider] = {
+      ...state.llmProfiles[provider],
+      ...cleanProviderProfile(saved, provider)
+    };
+  });
+
+  // Compatibility with older settings where only one `llm` block existed.
+  const oldLlm = settings.llm || {};
+  const oldProvider = normalizeProvider(oldLlm.provider || settings.provider || state.provider);
+  if (oldLlm.endpointUrl || oldLlm.modelId || oldLlm.apiKey) {
+    state.llmProfiles[oldProvider] = {
+      ...state.llmProfiles[oldProvider],
+      ...cleanProviderProfile(oldLlm, oldProvider)
+    };
+  }
+
+  state.provider = normalizeProvider(settings.provider || oldLlm.provider || state.provider);
+}
+
+function cleanProviderProfile(profile, provider) {
+  const defaults = defaultProviderProfile(provider);
+  return {
+    provider,
+    endpointUrl: nonBlank(profile.endpointUrl, defaults.endpointUrl),
+    modelId: nonBlank(profile.modelId, defaults.modelId),
+    apiKey: profile.apiKey || ''
+  };
+}
+
+function defaultProviderProfile(provider) {
+  return provider === 'google'
+    ? {
+        provider: 'google',
+        endpointUrl: 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
+        modelId: 'gemini-2.5-flash',
+        apiKey: ''
+      }
+    : {
+        provider: 'openai',
+        endpointUrl: 'https://api.openai.com/v1/chat/completions',
+        modelId: 'gpt-4.1-mini',
+        apiKey: ''
+      };
+}
+
+function currentProviderProfile() {
+  const provider = normalizeProvider(state.provider);
+  if (!state.llmProfiles[provider]) {
+    state.llmProfiles[provider] = defaultProviderProfile(provider);
+  }
+  return state.llmProfiles[provider];
+}
+
+function saveCurrentProviderFormToState() {
+  const provider = normalizeProvider(state.provider);
+  state.llmProfiles[provider] = {
+    provider,
+    endpointUrl: document.getElementById('endpointUrl')?.value || '',
+    modelId: document.getElementById('modelId')?.value || '',
+    apiKey: document.getElementById('apiKey')?.value || ''
+  };
+}
+
+function fillProviderFormFromState() {
+  const profile = currentProviderProfile();
+  setInputValue('endpointUrl', profile.endpointUrl);
+  setInputValue('modelId', profile.modelId);
+  setInputValue('apiKey', profile.apiKey);
+}
+
+function updateProviderButtons() {
+  document.querySelectorAll('.provider-button').forEach(button => {
+    button.classList.toggle('active', normalizeProvider(button.dataset.provider) === state.provider);
+  });
+}
+
+function serializeLlmProfiles() {
+  const result = {};
+  ['openai', 'google'].forEach(provider => {
+    const profile = state.llmProfiles[provider] || defaultProviderProfile(provider);
+    result[provider] = {
+      provider,
+      endpointUrl: profile.endpointUrl || '',
+      modelId: profile.modelId || '',
+      apiKey: profile.apiKey || '',
+      apiKeyPresent: Boolean(profile.apiKey)
+    };
+  });
+  return result;
+}
+
+function normalizeProvider(value) {
+  const text = String(value || '').trim().toLowerCase();
+  return text === 'google' ? 'google' : 'openai';
+}
+
+function nonBlank(value, fallback) {
+  const text = value === undefined || value === null ? '' : String(value).trim();
+  return text || fallback;
+}
+
+function setInputValue(id, value) {
+  const element = document.getElementById(id);
+  if (element) element.value = value || '';
 }
 
 function promptTextToHtml(text) {
@@ -426,6 +547,9 @@ function setValue(id, value) {
 
 async function saveSettings(section) {
   updateSerializedPrompt();
+  saveCurrentProviderFormToState();
+
+  const currentProfile = currentProviderProfile();
   const payload = {
     section,
     provider: state.provider,
@@ -433,11 +557,12 @@ async function saveSettings(section) {
     promptTemplate: serializePrompt(),
     llm: {
       provider: state.provider,
-      endpointUrl: document.getElementById('endpointUrl').value,
-      modelId: document.getElementById('modelId').value,
-      apiKey: document.getElementById('apiKey').value,
-      apiKeyPresent: Boolean(document.getElementById('apiKey').value)
+      endpointUrl: currentProfile.endpointUrl,
+      modelId: currentProfile.modelId,
+      apiKey: currentProfile.apiKey,
+      apiKeyPresent: Boolean(currentProfile.apiKey)
     },
+    llmProfiles: serializeLlmProfiles(),
     leadTriggerEvent: currentLeadTriggerEvent(),
     proxy: {
       enabled: document.getElementById('useProxy').checked,

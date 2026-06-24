@@ -35,14 +35,15 @@ public class LlmClient {
     }
 
     public LlmResult generate(Map<String, Object> settings, String prompt) {
-        Map<String, Object> llm = nestedMap(settings.get("llm"));
         Map<String, Object> proxy = nestedMap(settings.get("proxy"));
 
-        String provider = firstNonBlank(
-                stringValue(llm.get("provider")),
+        String provider = normalizeProvider(firstNonBlank(
                 stringValue(settings.get("provider")),
+                stringValue(nestedMap(settings.get("llm")).get("provider")),
                 "openai"
-        ).toLowerCase();
+        ));
+        Map<String, Object> llm = effectiveLlmProfile(settings, provider);
+
         String model = firstNonBlank(stringValue(llm.get("modelId")), provider.equals("google") ? "gemini-2.5-flash" : "gpt-4.1-mini");
         String endpoint = firstNonBlank(stringValue(llm.get("endpointUrl")), defaultEndpoint(provider));
         String apiKey = stringValue(llm.get("apiKey"));
@@ -81,6 +82,8 @@ public class LlmClient {
         log.info("LLM model: {}", model);
         if (provider.equals("google")) {
             log.info("LLM Google Search grounding enabled: true");
+        } else {
+            log.info("LLM OpenAI-compatible web plugin enabled: true");
         }
         log.info("LLM proxy enabled: {}", Boolean.TRUE.equals(proxy.get("enabled")));
         log.info("LLM request headers: Content-Type=application/json; Accept=application/json; Authorization={}", provider.equals("openai") ? "Bearer ***" : "not-used");
@@ -115,6 +118,26 @@ public class LlmClient {
         }
     }
 
+    private Map<String, Object> effectiveLlmProfile(Map<String, Object> settings, String provider) {
+        Map<String, Object> profiles = nestedMap(settings.get("llmProfiles"));
+        Map<String, Object> profile = nestedMap(profiles.get(provider));
+        if (!profile.isEmpty()) {
+            return profile;
+        }
+
+        // Backward compatibility with older settings schema where only one `llm` object existed.
+        Map<String, Object> oldLlm = nestedMap(settings.get("llm"));
+        String oldProvider = normalizeProvider(firstNonBlank(stringValue(oldLlm.get("provider")), stringValue(settings.get("provider")), provider));
+        if (oldProvider.equals(provider) && !oldLlm.isEmpty()) {
+            return oldLlm;
+        }
+        return new LinkedHashMap<>();
+    }
+
+    private String normalizeProvider(String value) {
+        return "google".equalsIgnoreCase(value == null ? "" : value.trim()) ? "google" : "openai";
+    }
+
     private HttpClient httpClient(Map<String, Object> proxy) {
         HttpClient.Builder builder = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(40))
@@ -147,6 +170,18 @@ public class LlmClient {
                 Map.of("role", "system", "content", "Ты помогаешь менеджеру быстро понять лид из CRM. Отвечай по-русски, структурно и по делу."),
                 Map.of("role", "user", "content", prompt)
         ));
+
+        // Web search plugin for OpenAI-compatible gateways that support Tokenator-style plugins.
+        // Example wire shape:
+        // {
+        //   "model": "gpt-5.5",
+        //   "messages": [...],
+        //   "plugins": [{"id": "web"}]
+        // }
+        // This is deliberately applied only to the OpenAI-compatible payload branch.
+        // Google keeps using its separate "tools": [{"google_search": {}}] format.
+        payload.put("plugins", List.of(Map.of("id", "web")));
+
         return payload;
     }
 
