@@ -2,6 +2,7 @@ package ru.abs7.leadprosvet.service.queue;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Pageable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import ru.abs7.leadprosvet.domain.BitrixPortal;
@@ -20,6 +21,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -29,6 +37,8 @@ public class LeadProcessingWorker {
     private static final Logger log = LoggerFactory.getLogger(LeadProcessingWorker.class);
     private static final String SETTINGS_KEY = "leadprosvet.settings";
     private static final Pattern TOKEN_PATTERN = Pattern.compile("\\{\\{([A-Z0-9_]+)}}");
+    private static final int MAX_LLM_ATTEMPTS_PER_JOB_CLAIM = 5;
+    private static final long LLM_RETRY_SLEEP_MS = 10_000L;
 
     private final LeadProcessingJobRepository jobRepository;
     private final BitrixPortalService bitrixPortalService;
@@ -36,7 +46,10 @@ public class LeadProcessingWorker {
     private final JsonStorageService jsonStorageService;
     private final LlmClient llmClient;
     private final ObjectMapper objectMapper;
+    private final ExecutorService executor;
+    private final Set<String> activeSlots = ConcurrentHashMap.newKeySet();
     private boolean disabledWorkerLogPrinted;
+    private boolean noKeysLogPrinted;
 
     public LeadProcessingWorker(
             LeadProcessingJobRepository jobRepository,
@@ -52,21 +65,61 @@ public class LeadProcessingWorker {
         this.jsonStorageService = jsonStorageService;
         this.llmClient = llmClient;
         this.objectMapper = objectMapper;
+        this.executor = Executors.newCachedThreadPool(new NamedWorkerThreadFactory());
     }
 
     @Scheduled(fixedDelayString = "${app.queue.worker-delay-ms:1500}")
-    public synchronized void processNextJob() {
+    public void processQueueTick() {
         if (!isServiceEnabled()) {
             if (!disabledWorkerLogPrinted) {
-                log.info("Lead processing worker paused: LeadProsvet service is disabled");
+                log.info("Lead processing workers paused: LeadProsvet service is disabled");
                 disabledWorkerLogPrinted = true;
             }
             return;
         }
         disabledWorkerLogPrinted = false;
-        jobRepository.firstPending().ifPresent(this::processJobSafely);
+
+        Map<String, Object> settings = jsonStorageService.getJsonSetting(SETTINGS_KEY);
+        List<LlmClient.ApiKeySlot> slots = llmClient.apiKeySlots(settings);
+        if (slots.isEmpty()) {
+            if (!noKeysLogPrinted) {
+                log.info("Lead processing workers paused: no active LLM API keys configured for provider={}", llmClient.currentProvider(settings));
+                noKeysLogPrinted = true;
+            }
+            return;
+        }
+        noKeysLogPrinted = false;
+
+        for (LlmClient.ApiKeySlot slot : slots) {
+            if (!activeSlots.add(slot.slotId())) {
+                continue;
+            }
+            executor.submit(() -> processOneJobForSlot(slot));
+        }
     }
 
+    private void processOneJobForSlot(LlmClient.ApiKeySlot slot) {
+        try {
+            Optional<LeadProcessingJob> claimed = claimNextPendingJob();
+            if (claimed.isEmpty()) {
+                return;
+            }
+            processClaimedJobSafely(claimed.get(), slot);
+        } finally {
+            activeSlots.remove(slot.slotId());
+        }
+    }
+
+    private Optional<LeadProcessingJob> claimNextPendingJob() {
+        List<LeadProcessingJob> candidates = jobRepository.findAllByStatusOrderByIdAsc("PENDING", Pageable.ofSize(20));
+        for (LeadProcessingJob candidate : candidates) {
+            int claimed = jobRepository.claimPendingJob(candidate.getId(), OffsetDateTime.now());
+            if (claimed == 1) {
+                return jobRepository.findById(candidate.getId());
+            }
+        }
+        return Optional.empty();
+    }
 
     private boolean isServiceEnabled() {
         Map<String, Object> settings = jsonStorageService.getJsonSetting(SETTINGS_KEY);
@@ -84,40 +137,40 @@ public class LeadProcessingWorker {
         return "true".equalsIgnoreCase(text) || "1".equals(text) || "yes".equalsIgnoreCase(text) || "on".equalsIgnoreCase(text);
     }
 
-    private void processJobSafely(LeadProcessingJob job) {
-        OffsetDateTime now = OffsetDateTime.now();
-        job.setStatus("PROCESSING");
-        job.setAttempt(job.getAttempt() + 1);
-        job.setStartedAt(now);
-        job.setUpdatedAt(now);
-        job.setLastError(null);
-        jobRepository.save(job);
-
+    private void processClaimedJobSafely(LeadProcessingJob job, LlmClient.ApiKeySlot slot) {
         log.info("==================== LEAD JOB START ====================");
-        log.info("Lead job started: jobId={}, eventLogId={}, event={}, leadId={}, attempt={}",
-                job.getId(), job.getIncomingEventId(), job.getEventName(), job.getLeadId(), job.getAttempt());
+        log.info("Lead job started: jobId={}, eventLogId={}, event={}, leadId={}, workerKey={}",
+                job.getId(), job.getIncomingEventId(), job.getEventName(), job.getLeadId(), slot.label());
 
         try {
-            processJob(job);
+            boolean done = processJob(job, slot);
+            if (!done) {
+                log.info("Lead job left in queue: jobId={}, leadId={}, workerKey={}, status={}",
+                        job.getId(), job.getLeadId(), slot.label(), job.getStatus());
+                return;
+            }
             OffsetDateTime finishedAt = OffsetDateTime.now();
             job.setStatus("DONE");
+            job.setAttempt(0);
             job.setFinishedAt(finishedAt);
             job.setUpdatedAt(finishedAt);
             jobRepository.save(job);
-            log.info("Lead job DONE: jobId={}, leadId={}", job.getId(), job.getLeadId());
+            log.info("Lead job DONE: jobId={}, leadId={}, workerKey={}", job.getId(), job.getLeadId(), slot.label());
         } catch (Exception e) {
             OffsetDateTime failedAt = OffsetDateTime.now();
             captureLlmFailurePayload(job, e);
 
-            boolean retryable = isRetryableFailure(e);
-            job.setStatus(retryable && job.getAttempt() < 3 ? "PENDING" : "FAILED");
+            // If a non-LLM error happened outside the five internal LLM attempts, return the lead
+            // to the queue so another worker/key can pick it later. This keeps morning batches moving.
+            job.setStatus("PENDING");
+            job.setAttempt(0);
             job.setLastError(e.getMessage());
             job.setFinishedAt(failedAt);
             job.setUpdatedAt(failedAt);
             jobRepository.save(job);
 
-            log.error("Lead job failed: jobId={}, leadId={}, retryable={}, nextStatus={}, error={}",
-                    job.getId(), job.getLeadId(), retryable, job.getStatus(), e.getMessage(), e);
+            log.error("Lead job returned to PENDING after infrastructure error: jobId={}, leadId={}, workerKey={}, error={}",
+                    job.getId(), job.getLeadId(), slot.label(), e.getMessage(), e);
         } finally {
             log.info("==================== LEAD JOB END ====================");
         }
@@ -130,21 +183,7 @@ public class LeadProcessingWorker {
         }
     }
 
-    private boolean isRetryableFailure(Exception e) {
-        if (e instanceof LlmClient.LlmHttpException llmHttpException) {
-            return llmHttpException.retryable();
-        }
-        String message = e.getMessage() == null ? "" : e.getMessage().toLowerCase();
-        if (message.contains("llm api key is empty")
-                || message.contains("api_key_invalid")
-                || message.contains("api key not valid")
-                || message.contains("invalid api key")) {
-            return false;
-        }
-        return true;
-    }
-
-    private void processJob(LeadProcessingJob job) {
+    private boolean processJob(LeadProcessingJob job, LlmClient.ApiKeySlot slot) {
         BitrixPortal portal = bitrixPortalService.currentPortalOrThrow();
         Map<String, Object> settings = jsonStorageService.getJsonSetting(SETTINGS_KEY);
 
@@ -156,6 +195,8 @@ public class LeadProcessingWorker {
 
         Map<String, Object> lead = new LinkedHashMap<>();
         leadRaw.forEach((key, value) -> lead.put(String.valueOf(key), value));
+        job.setLeadSnapshotJson(toPrettyJson(lead));
+        jobRepository.save(job);
 
         log.info("Bitrix lead loaded FULL: leadId={}, payload=\n{}", job.getLeadId(), toPrettyJson(leadPayload));
 
@@ -164,7 +205,43 @@ public class LeadProcessingWorker {
         jobRepository.save(job);
         log.info("Prompt for LLM FULL: jobId={}, leadId={}\n{}", job.getId(), job.getLeadId(), prompt);
 
-        LlmClient.LlmResult llmResult = llmClient.generate(settings, prompt);
+        LlmClient.LlmResult llmResult = null;
+        RuntimeException lastLlmError = null;
+        for (int attempt = 1; attempt <= MAX_LLM_ATTEMPTS_PER_JOB_CLAIM; attempt++) {
+            markLlmAttempt(job, attempt);
+            try {
+                log.info("LLM attempt started: jobId={}, leadId={}, attempt={}/{}, workerKey={}",
+                        job.getId(), job.getLeadId(), attempt, MAX_LLM_ATTEMPTS_PER_JOB_CLAIM, slot.label());
+                llmResult = llmClient.generate(settings, prompt, slot);
+                break;
+            } catch (RuntimeException e) {
+                lastLlmError = e;
+                captureLlmFailurePayload(job, e);
+                job.setLastError(e.getMessage());
+                job.setUpdatedAt(OffsetDateTime.now());
+                jobRepository.save(job);
+                log.warn("LLM attempt failed: jobId={}, leadId={}, attempt={}/{}, workerKey={}, error={}",
+                        job.getId(), job.getLeadId(), attempt, MAX_LLM_ATTEMPTS_PER_JOB_CLAIM, slot.label(), e.getMessage());
+
+                if (attempt < MAX_LLM_ATTEMPTS_PER_JOB_CLAIM) {
+                    sleepBeforeNextLlmAttempt(job, slot, attempt);
+                }
+            }
+        }
+
+        if (llmResult == null) {
+            OffsetDateTime now = OffsetDateTime.now();
+            job.setStatus("PENDING");
+            job.setAttempt(0);
+            job.setFinishedAt(now);
+            job.setUpdatedAt(now);
+            job.setLastError(lastLlmError == null ? "LLM failed after 5 attempts" : lastLlmError.getMessage());
+            jobRepository.save(job);
+            log.error("Lead job reset to PENDING after {} failed LLM attempts: jobId={}, leadId={}, workerKey={}",
+                    MAX_LLM_ATTEMPTS_PER_JOB_CLAIM, job.getId(), job.getLeadId(), slot.label());
+            return false;
+        }
+
         job.setLlmRequest(llmResult.requestJson());
         job.setLlmResponse(llmResult.responseJson());
         jobRepository.save(job);
@@ -179,6 +256,25 @@ public class LeadProcessingWorker {
         job.setBitrixUpdateResponse(updateResponseJson);
         jobRepository.save(job);
         log.info("Bitrix lead update response FULL: jobId={}, leadId={}\n{}", job.getId(), job.getLeadId(), updateResponseJson);
+        return true;
+    }
+
+    private void markLlmAttempt(LeadProcessingJob job, int attempt) {
+        job.setStatus("PROCESSING");
+        job.setAttempt(attempt);
+        job.setUpdatedAt(OffsetDateTime.now());
+        jobRepository.save(job);
+    }
+
+    private void sleepBeforeNextLlmAttempt(LeadProcessingJob job, LlmClient.ApiKeySlot slot, int completedAttempt) {
+        try {
+            log.info("LLM retry pause: jobId={}, leadId={}, workerKey={}, completedAttempt={}, sleepMs={}",
+                    job.getId(), job.getLeadId(), slot.label(), completedAttempt, LLM_RETRY_SLEEP_MS);
+            Thread.sleep(LLM_RETRY_SLEEP_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("LLM retry sleep interrupted", e);
+        }
     }
 
     private String buildPrompt(Map<String, Object> settings, Map<String, Object> lead) {
@@ -248,6 +344,17 @@ public class LeadProcessingWorker {
             return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(value);
         } catch (JacksonException e) {
             return String.valueOf(value);
+        }
+    }
+
+    private static final class NamedWorkerThreadFactory implements ThreadFactory {
+        private final AtomicInteger counter = new AtomicInteger(1);
+
+        @Override
+        public Thread newThread(Runnable runnable) {
+            Thread thread = new Thread(runnable, "lead-llm-worker-" + counter.getAndIncrement());
+            thread.setDaemon(true);
+            return thread;
         }
     }
 }

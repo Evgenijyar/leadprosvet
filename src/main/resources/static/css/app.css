@@ -544,3 +544,230 @@ h2 { margin: 0; font-size: 20px; letter-spacing: -.035em; }
 .trigger-option input {
     accent-color: var(--primary);
 }
+
+/* Multi-key LLM setup */
+.llm-grid {
+    grid-template-columns: minmax(520px, 1.65fr) minmax(270px, .75fr);
+}
+
+.api-keys-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+    padding: 13px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: #f8fafc;
+}
+
+.api-keys-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.api-keys-title {
+    display: block;
+    font-weight: 850;
+    color: #1e293b;
+    font-size: 14px;
+    margin-bottom: 3px;
+}
+
+.api-keys-head small {
+    display: block;
+    color: var(--muted);
+    line-height: 1.35;
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.api-key-list {
+    display: grid;
+    gap: 8px;
+    max-height: 310px;
+    overflow: auto;
+    scrollbar-gutter: stable;
+    padding-right: 3px;
+}
+
+.api-key-row {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) 34px;
+    gap: 8px;
+    align-items: center;
+}
+
+.api-key-number {
+    display: grid;
+    place-items: center;
+    height: 34px;
+    border-radius: 11px;
+    background: #e0f2fe;
+    color: #0369a1;
+    font-size: 12px;
+    font-weight: 850;
+}
+
+.api-key-input {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 10px 12px;
+    background: #fff;
+    color: var(--text);
+    outline: none;
+}
+
+.api-key-input:focus {
+    border-color: #93c5fd;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, .12);
+}
+
+.api-key-remove {
+    width: 34px;
+    height: 34px;
+    border: 1px solid #fecaca;
+    border-radius: 11px;
+    background: #fff1f2;
+    color: #dc2626;
+    font-weight: 900;
+}
+
+.proxy-panel {
+    padding: 14px;
+}
+
+.proxy-title-row p {
+    font-size: 12px;
+}
+
+/* Realtime queue */
+.queue-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    padding: 18px;
+}
+
+.queue-heading {
+    align-items: center;
+}
+
+.queue-stats {
+    flex: 0 0 auto;
+    padding: 9px 12px;
+    border-radius: 999px;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    color: #1d4ed8;
+    font-size: 13px;
+    font-weight: 850;
+    white-space: nowrap;
+}
+
+.queue-controls {
+    flex: 0 0 auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.queue-controls select {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    padding: 11px 12px;
+    background: #fff;
+    color: var(--text);
+    outline: none;
+}
+
+.queue-table-wrap {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: #fff;
+}
+
+.queue-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 13px;
+}
+
+.queue-table th,
+.queue-table td {
+    padding: 12px 12px;
+    border-bottom: 1px solid #eef2f7;
+    text-align: left;
+    vertical-align: middle;
+}
+
+.queue-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: #f8fafc;
+    color: #475569;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
+.queue-table tr:last-child td {
+    border-bottom: 0;
+}
+
+.queue-num-col,
+.queue-attempt-col,
+.queue-status-col {
+    width: 110px;
+    text-align: center !important;
+}
+
+.queue-num-col {
+    width: 64px;
+}
+
+.queue-empty {
+    height: 160px;
+    text-align: center !important;
+    color: var(--muted);
+    font-weight: 750;
+}
+
+.queue-status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 92px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: #f1f5f9;
+    color: #475569;
+    font-weight: 850;
+}
+
+.status-processing .queue-status-pill {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.status-pending .queue-status-pill {
+    background: #fef3c7;
+    color: #92400e;
+}

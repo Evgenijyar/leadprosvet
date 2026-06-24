@@ -7,34 +7,26 @@ const state = {
     openai: {
       endpointUrl: 'https://api.openai.com/v1/chat/completions',
       modelId: 'gpt-4.1-mini',
-      apiKey: ''
+      apiKey: '',
+      apiKeys: ['']
     },
     google: {
       endpointUrl: 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
       modelId: 'gemini-2.5-flash',
-      apiKey: ''
+      apiKey: '',
+      apiKeys: ['']
     }
-  }
+  },
+  queueTimer: null
 };
 
-const defaultPromptText = `Собери краткую справку о компании для первого звонка менеджера.
-
-Данные из Bitrix24:
-
-Компания: {{COMPANY_TITLE}}
-Сайт: {{WEB}}
-ИНН: {{UF_CRM_INN}}
-
-Нужно найти и структурировать: чем занимается компания, ключевые продукты/услуги, размер и география, если доступно, что важно знать перед первым звонком, возможные боли и первый заход для разговора.`;
-
-
-const defaultTokenLabels = {
-  COMPANY_TITLE: 'Компания',
-  WEB: 'Сайт',
-  UF_CRM_INN: 'ИНН'
-};
-
-const defaultPromptHtml = promptTextToHtml(defaultPromptText);
+const defaultPromptHtml = `
+<p>Собери краткую справку о компании для первого звонка менеджера.</p>
+<p>Данные из Bitrix24:</p>
+<p>Компания: ${tokenHtml({ id: 'COMPANY_TITLE', label: 'Компания' })}</p>
+<p>Сайт: ${tokenHtml({ id: 'WEB', label: 'Сайт' })}</p>
+<p>ИНН: ${tokenHtml({ id: 'UF_CRM_INN', label: 'ИНН' })}</p>
+<p>Нужно найти и структурировать: чем занимается компания, ключевые продукты/услуги, размер и география, если доступно, что важно знать перед первым звонком, возможные боли и первый заход для разговора.</p>`;
 
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('promptEditor').innerHTML = defaultPromptHtml;
@@ -44,8 +36,10 @@ document.addEventListener('DOMContentLoaded', () => {
   bindProxySwitch();
   bindPromptEditor();
   bindButtons();
+  bindQueuePage();
   loadFields().then(loadCurrentSettings);
   updateSerializedPrompt();
+  startQueuePolling();
 });
 
 function bindTabs() {
@@ -55,6 +49,7 @@ function bindTabs() {
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
       button.classList.add('active');
       document.getElementById(`tab-${button.dataset.tab}`).classList.add('active');
+      if (button.dataset.tab === 'queue') refreshRealtimeQueue();
     });
   });
 }
@@ -139,13 +134,6 @@ function bindProxySwitch() {
 function bindPromptEditor() {
   const editor = document.getElementById('promptEditor');
 
-  editor.addEventListener('paste', event => {
-    event.preventDefault();
-    const text = normalizeClipboardText(event.clipboardData?.getData('text/plain') || '');
-    insertPlainTextAtCaret(text);
-    updateSerializedPrompt();
-  });
-
   editor.addEventListener('pointerup', event => {
     if (!event.target.closest('.token-remove')) {
       updateSerializedPrompt();
@@ -154,6 +142,12 @@ function bindPromptEditor() {
 
   editor.addEventListener('keyup', updateSerializedPrompt);
   editor.addEventListener('input', updateSerializedPrompt);
+  editor.addEventListener('paste', event => {
+    event.preventDefault();
+    const text = event.clipboardData?.getData('text/plain') || '';
+    insertPlainTextAtCaret(text);
+    updateSerializedPrompt();
+  });
 
   editor.addEventListener('click', event => {
     const remove = event.target.closest('.token-remove');
@@ -178,6 +172,11 @@ function bindButtons() {
   document.getElementById('saveIntegrationBtn').addEventListener('click', () => saveSettings('integration'));
   document.getElementById('saveLlmBtn').addEventListener('click', () => saveSettings('llm'));
   document.getElementById('applyWebhookModeBtn')?.addEventListener('click', applyWebhookMode);
+  document.getElementById('addApiKeyBtn')?.addEventListener('click', () => {
+    const profile = currentProviderProfile();
+    profile.apiKeys = cleanApiKeys([...profileApiKeys(profile), '']);
+    renderApiKeyInputs(profile.apiKeys);
+  });
 
   document.addEventListener('pointermove', onPointerMove);
   document.addEventListener('pointerup', onPointerUp);
@@ -196,9 +195,11 @@ async function loadFields() {
     }
     state.fields = payload;
     renderFields();
+    renderQueueFieldSelectors();
   } catch (error) {
     state.fields = [];
     renderFields();
+    renderQueueFieldSelectors();
     showToast('Не удалось загрузить реальные поля лида из Bitrix24: ' + error.message);
   }
 }
@@ -358,6 +359,36 @@ function insertPromptToken(field) {
   selection.addRange(range);
 }
 
+
+function insertPlainTextAtCaret(text) {
+  const editor = document.getElementById('promptEditor');
+  editor.focus();
+  const selection = window.getSelection();
+  let range;
+  if (selection.rangeCount) {
+    range = selection.getRangeAt(0);
+  } else {
+    range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+  if (!editor.contains(range.commonAncestorContainer)) {
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+  range.deleteContents();
+  const normalized = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const fragment = document.createDocumentFragment();
+  normalized.split('\n').forEach((line, index) => {
+    if (index > 0) fragment.appendChild(document.createElement('br'));
+    if (line) fragment.appendChild(document.createTextNode(line));
+  });
+  range.insertNode(fragment);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
 function usedFieldIds() {
   return new Set(
     [...document.querySelectorAll('#promptEditor .prompt-token')]
@@ -376,48 +407,38 @@ function chipInnerHtml(field) {
 
 function serializePrompt() {
   const editor = document.getElementById('promptEditor');
-  return serializePromptNodes(editor.childNodes)
-    .replace(/\u00a0/g, ' ')
-    .replace(/\n$/, '');
-}
-
-function serializePromptNodes(nodes) {
-  let result = '';
-  nodes.forEach(node => {
-    result += serializePromptNode(node);
+  const clone = editor.cloneNode(true);
+  clone.querySelectorAll('.prompt-token').forEach(token => {
+    const text = document.createTextNode(`{{${token.dataset.fieldId}}}`);
+    token.replaceWith(text);
   });
-  return result;
+  return htmlToPlainTextPreservingBreaks(clone);
 }
 
-function serializePromptNode(node) {
-  if (node.nodeType === Node.TEXT_NODE) {
-    return node.nodeValue || '';
+function htmlToPlainTextPreservingBreaks(root) {
+  let output = '';
+  const blockTags = new Set(['DIV', 'P', 'SECTION', 'ARTICLE', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6']);
+
+  function walk(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      output += node.nodeValue || '';
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const tag = node.tagName;
+    if (tag === 'BR') {
+      output += '\n';
+      return;
+    }
+    const before = output.length;
+    node.childNodes.forEach(walk);
+    if (blockTags.has(tag) && output.length > before && !output.endsWith('\n')) {
+      output += '\n';
+    }
   }
 
-  if (node.nodeType !== Node.ELEMENT_NODE) {
-    return '';
-  }
-
-  const element = node;
-  if (element.classList?.contains('prompt-token')) {
-    return `{{${element.dataset.fieldId || ''}}}`;
-  }
-
-  const tag = element.tagName;
-  if (tag === 'BR') {
-    return '\n';
-  }
-
-  const text = serializePromptNodes(element.childNodes);
-  if (isPromptBlockElement(tag)) {
-    return text + '\n';
-  }
-
-  return text;
-}
-
-function isPromptBlockElement(tag) {
-  return ['DIV', 'P', 'LI', 'SECTION', 'ARTICLE', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(tag);
+  root.childNodes.forEach(walk);
+  return output.replace(/\u00a0/g, '');
 }
 
 function updateSerializedPrompt() {
@@ -482,7 +503,7 @@ function loadProviderProfilesFromSettings(settings) {
   // Compatibility with older settings where only one `llm` block existed.
   const oldLlm = settings.llm || {};
   const oldProvider = normalizeProvider(oldLlm.provider || settings.provider || state.provider);
-  if (oldLlm.endpointUrl || oldLlm.modelId || oldLlm.apiKey) {
+  if (oldLlm.endpointUrl || oldLlm.modelId || oldLlm.apiKey || oldLlm.apiKeys) {
     state.llmProfiles[oldProvider] = {
       ...state.llmProfiles[oldProvider],
       ...cleanProviderProfile(oldLlm, oldProvider)
@@ -494,11 +515,13 @@ function loadProviderProfilesFromSettings(settings) {
 
 function cleanProviderProfile(profile, provider) {
   const defaults = defaultProviderProfile(provider);
+  const keys = apiKeysFromSavedProfile(profile);
   return {
     provider,
     endpointUrl: nonBlank(profile.endpointUrl, defaults.endpointUrl),
     modelId: nonBlank(profile.modelId, defaults.modelId),
-    apiKey: profile.apiKey || ''
+    apiKey: keys[0] || '',
+    apiKeys: keys.length ? keys : ['']
   };
 }
 
@@ -508,13 +531,15 @@ function defaultProviderProfile(provider) {
         provider: 'google',
         endpointUrl: 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
         modelId: 'gemini-2.5-flash',
-        apiKey: ''
+        apiKey: '',
+        apiKeys: ['']
       }
     : {
         provider: 'openai',
         endpointUrl: 'https://api.openai.com/v1/chat/completions',
         modelId: 'gpt-4.1-mini',
-        apiKey: ''
+        apiKey: '',
+        apiKeys: ['']
       };
 }
 
@@ -528,11 +553,13 @@ function currentProviderProfile() {
 
 function saveCurrentProviderFormToState() {
   const provider = normalizeProvider(state.provider);
+  const apiKeys = cleanApiKeys(readApiKeysFromForm());
   state.llmProfiles[provider] = {
     provider,
     endpointUrl: document.getElementById('endpointUrl')?.value || '',
     modelId: document.getElementById('modelId')?.value || '',
-    apiKey: document.getElementById('apiKey')?.value || ''
+    apiKey: firstRealApiKey(apiKeys),
+    apiKeys
   };
 }
 
@@ -540,7 +567,7 @@ function fillProviderFormFromState() {
   const profile = currentProviderProfile();
   setInputValue('endpointUrl', profile.endpointUrl);
   setInputValue('modelId', profile.modelId);
-  setInputValue('apiKey', profile.apiKey);
+  renderApiKeyInputs(profileApiKeys(profile));
 }
 
 function updateProviderButtons() {
@@ -557,11 +584,68 @@ function serializeLlmProfiles() {
       provider,
       endpointUrl: profile.endpointUrl || '',
       modelId: profile.modelId || '',
-      apiKey: profile.apiKey || '',
-      apiKeyPresent: Boolean(profile.apiKey)
+      apiKey: firstRealApiKey(profileApiKeys(profile)),
+      apiKeys: cleanApiKeys(profileApiKeys(profile)).filter(Boolean),
+      apiKeyPresent: Boolean(firstRealApiKey(profileApiKeys(profile))),
+      apiKeyCount: cleanApiKeys(profileApiKeys(profile)).filter(Boolean).length
     };
   });
   return result;
+}
+
+
+function apiKeysFromSavedProfile(profile) {
+  if (Array.isArray(profile.apiKeys)) {
+    const keys = profile.apiKeys.map(value => String(value || '').trim()).filter(Boolean);
+    if (keys.length) return keys;
+  }
+  const single = String(profile.apiKey || '').trim();
+  return single ? [single] : [''];
+}
+
+function profileApiKeys(profile) {
+  return cleanApiKeys(profile.apiKeys || (profile.apiKey ? [profile.apiKey] : ['']));
+}
+
+function cleanApiKeys(keys) {
+  const result = (Array.isArray(keys) ? keys : [''])
+    .map(value => String(value || '').trim());
+  return result.length ? result : [''];
+}
+
+function firstRealApiKey(keys) {
+  return cleanApiKeys(keys).find(Boolean) || '';
+}
+
+function readApiKeysFromForm() {
+  return [...document.querySelectorAll('#apiKeyList .api-key-input')].map(input => input.value);
+}
+
+function renderApiKeyInputs(keys) {
+  const list = document.getElementById('apiKeyList');
+  if (!list) return;
+  const normalized = cleanApiKeys(keys);
+  const rows = normalized.length ? normalized : [''];
+  list.innerHTML = '';
+  rows.forEach((key, index) => {
+    const row = document.createElement('div');
+    row.className = 'api-key-row';
+    row.innerHTML = `
+      <span class="api-key-number">${index + 1}</span>
+      <input class="api-key-input" type="password" value="${escapeHtml(key)}" placeholder="API-ключ #${index + 1}">
+      <button class="api-key-remove" type="button" title="Удалить ключ">×</button>
+    `;
+    row.querySelector('.api-key-input').addEventListener('input', () => saveCurrentProviderFormToState());
+    row.querySelector('.api-key-remove').addEventListener('click', () => {
+      const current = readApiKeysFromForm();
+      current.splice(index, 1);
+      const profile = currentProviderProfile();
+      profile.apiKeys = cleanApiKeys(current.length ? current : ['']);
+      profile.apiKey = firstRealApiKey(profile.apiKeys);
+      renderApiKeyInputs(profile.apiKeys);
+    });
+    list.appendChild(row);
+  });
 }
 
 function normalizeProvider(value) {
@@ -580,87 +664,13 @@ function setInputValue(id, value) {
 }
 
 function promptTextToHtml(text) {
-  const source = String(text || '');
-  const tokenPattern = /\{\{([A-Z0-9_]+)}}/g;
-  let html = '';
-  let lastIndex = 0;
-  let match;
-
-  while ((match = tokenPattern.exec(source)) !== null) {
-    html += plainTextToEditorHtml(source.slice(lastIndex, match.index));
-    const fieldId = match[1];
-    const field = state.fields.find(item => item.id === fieldId) || { id: fieldId, label: defaultTokenLabels[fieldId] || fieldId };
-    html += tokenHtml(field);
-    lastIndex = match.index + match[0].length;
-  }
-
-  html += plainTextToEditorHtml(source.slice(lastIndex));
-  return html || '<br>';
-}
-
-function plainTextToEditorHtml(text) {
-  return escapeHtml(text).replace(/\n/g, '<br>');
-}
-
-function normalizeClipboardText(text) {
-  return String(text || '')
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    .replace(/\u0000/g, '');
-}
-
-function insertPlainTextAtCaret(text) {
-  const editor = document.getElementById('promptEditor');
-  editor.focus();
-
-  const selection = window.getSelection();
-  let range;
-  if (selection.rangeCount) {
-    range = selection.getRangeAt(0);
-  } else {
-    range = document.createRange();
-    range.selectNodeContents(editor);
-    range.collapse(false);
-  }
-
-  if (!editor.contains(range.commonAncestorContainer)) {
-    range.selectNodeContents(editor);
-    range.collapse(false);
-  }
-
-  const token = range.startContainer?.parentElement?.closest?.('.prompt-token');
-  if (token) {
-    range.setStartAfter(token);
-    range.setEndAfter(token);
-  }
-
-  const fragment = document.createDocumentFragment();
-  const lines = normalizeClipboardText(text).split('\n');
-  let lastNode = null;
-
-  lines.forEach((line, index) => {
-    if (index > 0) {
-      const br = document.createElement('br');
-      fragment.appendChild(br);
-      lastNode = br;
-    }
-    if (line.length > 0) {
-      const textNode = document.createTextNode(line);
-      fragment.appendChild(textNode);
-      lastNode = textNode;
-    }
+  const escaped = escapeHtml(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const withTokens = escaped.replace(/\{\{([A-Z0-9_]+)}}/g, (_, fieldId) => {
+    const field = state.fields.find(item => item.id === fieldId) || { id: fieldId, label: fieldId };
+    return tokenHtml(field);
   });
-
-  if (!lastNode) return;
-
-  range.deleteContents();
-  range.insertNode(fragment);
-  range.setStartAfter(lastNode);
-  range.setEndAfter(lastNode);
-  selection.removeAllRanges();
-  selection.addRange(range);
+  return withTokens.replace(/\n/g, '<br>');
 }
-
 
 function setValue(id, value) {
   if (value === undefined || value === null) return;
@@ -673,6 +683,7 @@ async function saveSettings(section) {
   saveCurrentProviderFormToState();
 
   const currentProfile = currentProviderProfile();
+  const currentApiKeys = cleanApiKeys(profileApiKeys(currentProfile)).filter(Boolean);
   const payload = {
     section,
     provider: state.provider,
@@ -682,8 +693,10 @@ async function saveSettings(section) {
       provider: state.provider,
       endpointUrl: currentProfile.endpointUrl,
       modelId: currentProfile.modelId,
-      apiKey: currentProfile.apiKey,
-      apiKeyPresent: Boolean(currentProfile.apiKey)
+      apiKey: currentApiKeys[0] || '',
+      apiKeys: currentApiKeys,
+      apiKeyPresent: currentApiKeys.length > 0,
+      apiKeyCount: currentApiKeys.length
     },
     llmProfiles: serializeLlmProfiles(),
     leadTriggerEvent: currentLeadTriggerEvent(),
@@ -738,6 +751,114 @@ function setLeadTriggerEvent(value) {
   document.querySelectorAll('input[name="leadTriggerEvent"]').forEach(input => {
     input.checked = input.value === normalized;
   });
+}
+
+
+function bindQueuePage() {
+  document.getElementById('queueFieldOne')?.addEventListener('change', () => {
+    saveQueueColumnSelection();
+    refreshRealtimeQueue();
+  });
+  document.getElementById('queueFieldTwo')?.addEventListener('change', () => {
+    saveQueueColumnSelection();
+    refreshRealtimeQueue();
+  });
+}
+
+function renderQueueFieldSelectors() {
+  const first = document.getElementById('queueFieldOne');
+  const second = document.getElementById('queueFieldTwo');
+  if (!first || !second) return;
+
+  const savedOne = localStorage.getItem('leadprosvet.queueFieldOne') || 'ID';
+  const savedTwo = localStorage.getItem('leadprosvet.queueFieldTwo') || 'TITLE';
+  const fields = [
+    { id: 'ID', label: 'ID лида', group: 'Системное' },
+    ...state.fields
+  ];
+
+  [first, second].forEach(select => {
+    const current = select === first ? savedOne : savedTwo;
+    select.innerHTML = fields.map(field =>
+      `<option value="${escapeHtml(field.id)}">${escapeHtml(field.label || field.id)} · ${escapeHtml(field.id)}</option>`
+    ).join('');
+    select.value = fields.some(field => field.id === current) ? current : (select === first ? 'ID' : 'TITLE');
+  });
+  updateQueueColumnTitles();
+}
+
+function saveQueueColumnSelection() {
+  const first = document.getElementById('queueFieldOne')?.value || 'ID';
+  const second = document.getElementById('queueFieldTwo')?.value || 'TITLE';
+  localStorage.setItem('leadprosvet.queueFieldOne', first);
+  localStorage.setItem('leadprosvet.queueFieldTwo', second);
+  updateQueueColumnTitles();
+}
+
+function updateQueueColumnTitles() {
+  const one = document.getElementById('queueFieldOne')?.value || 'ID';
+  const two = document.getElementById('queueFieldTwo')?.value || 'TITLE';
+  const oneTitle = document.getElementById('queueFieldOneTitle');
+  const twoTitle = document.getElementById('queueFieldTwoTitle');
+  if (oneTitle) oneTitle.textContent = queueFieldLabel(one);
+  if (twoTitle) twoTitle.textContent = queueFieldLabel(two);
+}
+
+function queueFieldLabel(id) {
+  const field = [{ id: 'ID', label: 'ID лида' }, ...state.fields].find(item => item.id === id);
+  return field ? `${field.label || field.id}` : id;
+}
+
+function startQueuePolling() {
+  clearInterval(state.queueTimer);
+  state.queueTimer = setInterval(refreshRealtimeQueue, 1500);
+  refreshRealtimeQueue();
+}
+
+async function refreshRealtimeQueue() {
+  const body = document.getElementById('queueTableBody');
+  if (!body) return;
+  const first = document.getElementById('queueFieldOne')?.value || 'ID';
+  const second = document.getElementById('queueFieldTwo')?.value || 'TITLE';
+  updateQueueColumnTitles();
+  try {
+    const url = `/api/bitrix/queue/realtime?firstFieldId=${encodeURIComponent(first)}&secondFieldId=${encodeURIComponent(second)}`;
+    const response = await fetch(url, { cache: 'no-store' });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) throw new Error(payload.error || `HTTP ${response.status}`);
+    renderQueueTable(payload.jobs || []);
+    const stats = document.getElementById('queueStats');
+    if (stats) {
+      stats.textContent = `Ожидание: ${payload.pending || 0} · В работе: ${payload.processing || 0} · Ключей: ${payload.apiKeyCount || 0}`;
+    }
+  } catch (error) {
+    console.warn('Realtime queue refresh failed', error);
+  }
+}
+
+function renderQueueTable(jobs) {
+  const body = document.getElementById('queueTableBody');
+  if (!body) return;
+  if (!jobs.length) {
+    body.innerHTML = '<tr><td colspan="5" class="queue-empty">Очередь пока пуста</td></tr>';
+    return;
+  }
+  body.innerHTML = jobs.map((job, index) => `
+    <tr class="queue-row status-${String(job.status || '').toLowerCase()}">
+      <td class="queue-num-col">${index + 1}</td>
+      <td>${escapeHtml(job.firstValue || '')}</td>
+      <td>${escapeHtml(job.secondValue || '')}</td>
+      <td class="queue-attempt-col">${Number(job.attempt || 0) || ''}</td>
+      <td class="queue-status-col"><span class="queue-status-pill">${queueStatusLabel(job.status)}</span></td>
+    </tr>
+  `).join('');
+}
+
+function queueStatusLabel(status) {
+  const text = String(status || '').toUpperCase();
+  if (text === 'PROCESSING') return 'В работе';
+  if (text === 'PENDING') return 'Ожидание';
+  return text || '—';
 }
 
 function showToast(message) {

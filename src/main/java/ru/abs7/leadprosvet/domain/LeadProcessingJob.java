@@ -68,6 +68,10 @@ public class LeadProcessingJob {
     @Column(name = "bitrix_update_response")
     private String bitrixUpdateResponse;
 
+    @Lob
+    @Column(name = "lead_snapshot_json")
+    private String leadSnapshotJson;
+
     protected LeadProcessingJob() {
     }
 
@@ -185,4 +189,13 @@ public class LeadProcessingJob {
     public void setBitrixUpdateResponse(String bitrixUpdateResponse) {
         this.bitrixUpdateResponse = bitrixUpdateResponse;
     }
+
+    public String getLeadSnapshotJson() {
+        return leadSnapshotJson;
+    }
+
+    public void setLeadSnapshotJson(String leadSnapshotJson) {
+        this.leadSnapshotJson = leadSnapshotJson;
+    }
 }
+

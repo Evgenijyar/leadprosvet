@@ -12,6 +12,7 @@ import ru.abs7.leadprosvet.dto.StoredSettingResponse;
 import ru.abs7.leadprosvet.service.JsonStorageService;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -133,13 +134,22 @@ public class SettingsMockController {
         putIfPresent(current, "endpointUrl", incomingProfile.get("endpointUrl"));
         putIfPresent(current, "modelId", incomingProfile.get("modelId"));
 
-        // API-key is sensitive and annoying to re-enter. If the browser sends an empty value,
-        // keep the previous saved key instead of wiping the provider profile.
-        String incomingKey = stringValue(incomingProfile.get("apiKey"));
-        if (incomingKey != null && !incomingKey.isBlank()) {
-            current.put("apiKey", incomingKey);
+        // API keys are sensitive and annoying to re-enter. Old UI could send empty `apiKey`,
+        // so we keep previous keys unless the new multi-key `apiKeys` field is explicitly sent.
+        boolean apiKeysExplicitlySent = incomingProfile.containsKey("apiKeys");
+        List<String> incomingKeys = apiKeysFromProfile(incomingProfile);
+        if (apiKeysExplicitlySent) {
+            current.put("apiKeys", incomingKeys);
+            current.put("apiKey", incomingKeys.isEmpty() ? "" : incomingKeys.getFirst()); // compatibility with old code/UI
+        } else if (!incomingKeys.isEmpty()) {
+            current.put("apiKeys", incomingKeys);
+            current.put("apiKey", incomingKeys.getFirst()); // compatibility with old code/UI
         }
-        current.put("apiKeyPresent", stringValue(current.get("apiKey")) != null && !stringValue(current.get("apiKey")).isBlank());
+        List<String> savedKeys = apiKeysFromProfile(current);
+        current.put("apiKeys", savedKeys);
+        current.put("apiKey", savedKeys.isEmpty() ? "" : savedKeys.getFirst());
+        current.put("apiKeyPresent", !savedKeys.isEmpty());
+        current.put("apiKeyCount", savedKeys.size());
         current.put("provider", normalizedProvider);
         profiles.put(normalizedProvider, current);
     }
@@ -157,9 +167,29 @@ public class SettingsMockController {
                 stringValue(profile.get("modelId")),
                 provider.equals("google") ? "gemini-2.5-flash" : "gpt-4.1-mini"
         ));
-        String apiKey = firstNonBlank(stringValue(profile.get("apiKey")), "");
-        result.put("apiKey", apiKey);
-        result.put("apiKeyPresent", !apiKey.isBlank());
+        List<String> apiKeys = apiKeysFromProfile(profile);
+        result.put("apiKeys", apiKeys);
+        result.put("apiKey", apiKeys.isEmpty() ? "" : apiKeys.getFirst());
+        result.put("apiKeyPresent", !apiKeys.isEmpty());
+        result.put("apiKeyCount", apiKeys.size());
+        return result;
+    }
+
+    private List<String> apiKeysFromProfile(Map<String, Object> profile) {
+        List<String> result = new ArrayList<>();
+        Object apiKeys = profile == null ? null : profile.get("apiKeys");
+        if (apiKeys instanceof List<?> list) {
+            for (Object item : list) {
+                String key = stringValue(item);
+                if (key != null && !key.isBlank()) {
+                    result.add(key.trim());
+                }
+            }
+        }
+        String singleKey = stringValue(profile == null ? null : profile.get("apiKey"));
+        if (result.isEmpty() && singleKey != null && !singleKey.isBlank()) {
+            result.add(singleKey.trim());
+        }
         return result;
     }
 

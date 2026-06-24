@@ -1,21 +1,14 @@
 # Build output
 target/
-out/
-build/
+*.class
 
-# Runtime database / local application data
+# Runtime data / local H2 database
 data/
 *.mv.db
 *.trace.db
 *.lock.db
-*.h2.db
-
-# Environment and local secrets
-.env
-.env.*
 
 # IDE / OS
 .idea/
 *.iml
 .DS_Store
-Thumbs.db

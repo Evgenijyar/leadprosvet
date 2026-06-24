@@ -33,6 +33,7 @@
             <div class="tabs">
                 <button class="tab-button active" data-tab="integration" type="button">Интеграция</button>
                 <button class="tab-button" data-tab="llm" type="button">Настройки LLM</button>
+                <button class="tab-button" data-tab="queue" type="button">Реалтайм очередь</button>
             </div>
 
             <div class="tab-panel active" id="tab-integration">
@@ -74,6 +75,49 @@
                         </div>
                     </section>
                 </div>
+            </div>
+
+
+            <div class="tab-panel" id="tab-queue">
+                <section class="queue-panel">
+                    <div class="panel-heading compact-heading queue-heading">
+                        <div>
+                            <h2>Реалтайм очередь</h2>
+                            <p>Только лиды в ожидании и в работе. После успешной записи ответа в Bitrix24 лид исчезает из этой таблицы.</p>
+                        </div>
+                        <div class="queue-stats" id="queueStats">Ожидание: 0 · В работе: 0 · Ключей: 0</div>
+                    </div>
+
+                    <div class="queue-controls">
+                        <label class="form-field">
+                            <span>Колонка 1</span>
+                            <select id="queueFieldOne"></select>
+                        </label>
+                        <label class="form-field">
+                            <span>Колонка 2</span>
+                            <select id="queueFieldTwo"></select>
+                        </label>
+                    </div>
+
+                    <div class="queue-table-wrap">
+                        <table class="queue-table">
+                            <thead>
+                            <tr>
+                                <th class="queue-num-col">№</th>
+                                <th id="queueFieldOneTitle">Колонка 1</th>
+                                <th id="queueFieldTwoTitle">Колонка 2</th>
+                                <th class="queue-attempt-col">Попытка</th>
+                                <th class="queue-status-col">Статус</th>
+                            </tr>
+                            </thead>
+                            <tbody id="queueTableBody">
+                            <tr>
+                                <td colspan="5" class="queue-empty">Очередь пока пуста</td>
+                            </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
             </div>
 
             <div class="tab-panel" id="tab-llm">
@@ -118,10 +162,16 @@
                                 <span>ID модели</span>
                                 <input id="modelId" type="text" value="gpt-4.1-mini">
                             </label>
-                            <label class="form-field">
-                                <span>API-ключ</span>
-                                <input id="apiKey" type="password" placeholder="Вставь ключ API">
-                            </label>
+                            <div class="api-keys-card">
+                                <div class="api-keys-head">
+                                    <div>
+                                        <span class="api-keys-title">API-ключи</span>
+                                        <small>Сколько ключей добавлено, столько параллельных обработчиков очереди будет запущено.</small>
+                                    </div>
+                                    <button class="small-button" id="addApiKeyBtn" type="button">+ ключ</button>
+                                </div>
+                                <div class="api-key-list" id="apiKeyList"></div>
+                            </div>
                         </div>
                     </section>
 

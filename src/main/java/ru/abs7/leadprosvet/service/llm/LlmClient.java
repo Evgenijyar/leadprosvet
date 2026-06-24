@@ -18,6 +18,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,18 +36,21 @@ public class LlmClient {
     }
 
     public LlmResult generate(Map<String, Object> settings, String prompt) {
-        Map<String, Object> proxy = nestedMap(settings.get("proxy"));
+        List<ApiKeySlot> slots = apiKeySlots(settings);
+        if (slots.isEmpty()) {
+            throw new IllegalStateException("LLM API key is empty. Сохрани API-ключ на вкладке Настройки LLM.");
+        }
+        return generate(settings, prompt, slots.getFirst());
+    }
 
-        String provider = normalizeProvider(firstNonBlank(
-                stringValue(settings.get("provider")),
-                stringValue(nestedMap(settings.get("llm")).get("provider")),
-                "openai"
-        ));
+    public LlmResult generate(Map<String, Object> settings, String prompt, ApiKeySlot apiKeySlot) {
+        String provider = normalizeProvider(apiKeySlot == null ? null : apiKeySlot.provider());
+        Map<String, Object> proxy = nestedMap(settings.get("proxy"));
         Map<String, Object> llm = effectiveLlmProfile(settings, provider);
 
         String model = firstNonBlank(stringValue(llm.get("modelId")), provider.equals("google") ? "gemini-2.5-flash" : "gpt-4.1-mini");
         String endpoint = firstNonBlank(stringValue(llm.get("endpointUrl")), defaultEndpoint(provider));
-        String apiKey = stringValue(llm.get("apiKey"));
+        String apiKey = apiKeySlot == null ? "" : stringValue(apiKeySlot.apiKey());
         if (apiKey == null || apiKey.isBlank()) {
             throw new IllegalStateException("LLM API key is empty. Сохрани API-ключ на вкладке Настройки LLM.");
         }
@@ -82,6 +86,7 @@ public class LlmClient {
         log.info("LLM provider: {}", provider);
         log.info("LLM endpoint: {}", maskUrl(resolvedEndpoint));
         log.info("LLM model: {}", model);
+        log.info("LLM key slot: {}", apiKeySlot == null ? "default" : apiKeySlot.label());
         if (provider.equals("google")) {
             log.info("LLM Google Search grounding enabled: true; thinkingLevel=HIGH; endpointApi=generateContent");
         } else {
@@ -122,6 +127,48 @@ public class LlmClient {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("LLM request interrupted", e);
         }
+    }
+
+    public String currentProvider(Map<String, Object> settings) {
+        return normalizeProvider(firstNonBlank(
+                stringValue(settings.get("provider")),
+                stringValue(nestedMap(settings.get("llm")).get("provider")),
+                "openai"
+        ));
+    }
+
+    public List<ApiKeySlot> apiKeySlots(Map<String, Object> settings) {
+        String provider = currentProvider(settings);
+        Map<String, Object> llm = effectiveLlmProfile(settings, provider);
+        List<String> keys = profileApiKeys(llm);
+        List<ApiKeySlot> result = new ArrayList<>();
+        for (int i = 0; i < keys.size(); i++) {
+            String key = keys.get(i);
+            if (key == null || key.isBlank()) {
+                continue;
+            }
+            result.add(new ApiKeySlot(provider, i, key.trim()));
+        }
+        return result;
+    }
+
+    private List<String> profileApiKeys(Map<String, Object> profile) {
+        List<String> result = new ArrayList<>();
+        Object apiKeys = profile.get("apiKeys");
+        if (apiKeys instanceof List<?> list) {
+            for (Object item : list) {
+                String key = stringValue(item);
+                if (key != null && !key.isBlank()) {
+                    result.add(key.trim());
+                }
+            }
+        }
+
+        String singleKey = stringValue(profile.get("apiKey"));
+        if (result.isEmpty() && singleKey != null && !singleKey.isBlank()) {
+            result.add(singleKey.trim());
+        }
+        return result;
     }
 
     private Map<String, Object> effectiveLlmProfile(Map<String, Object> settings, String provider) {
@@ -511,6 +558,16 @@ public class LlmClient {
 
         public boolean retryable() {
             return statusCode == 408 || statusCode == 429 || statusCode >= 500;
+        }
+    }
+
+    public record ApiKeySlot(String provider, int index, String apiKey) {
+        public String slotId() {
+            return provider + "-" + index;
+        }
+
+        public String label() {
+            return provider + " #" + (index + 1);
         }
     }
 
