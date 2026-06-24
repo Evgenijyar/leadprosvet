@@ -53,17 +53,19 @@ public class LlmClient {
 
         Map<String, Object> requestPayload;
         HttpRequest.Builder requestBuilder;
-        String resolvedEndpoint = endpoint.replace("{model}", urlEncode(model));
+        String resolvedEndpoint;
 
         if (provider.equals("google")) {
             requestPayload = googlePayload(prompt);
-            resolvedEndpoint = withGoogleKey(resolvedEndpoint, apiKey);
+            resolvedEndpoint = resolveGoogleGenerateContentEndpoint(endpoint, model);
             requestBuilder = HttpRequest.newBuilder(URI.create(resolvedEndpoint))
                     .timeout(Duration.ofSeconds(180))
                     .header("Content-Type", "application/json; charset=UTF-8")
-                    .header("Accept", "application/json");
+                    .header("Accept", "application/json")
+                    .header("x-goog-api-key", apiKey);
         } else {
             requestPayload = openAiPayload(model, prompt);
+            resolvedEndpoint = endpoint.replace("{model}", urlEncode(model));
             requestBuilder = HttpRequest.newBuilder(URI.create(resolvedEndpoint))
                     .timeout(Duration.ofSeconds(180))
                     .header("Content-Type", "application/json; charset=UTF-8")
@@ -86,7 +88,11 @@ public class LlmClient {
             log.info("LLM OpenAI-compatible web_search tool enabled: true");
         }
         log.info("LLM proxy enabled: {}", Boolean.TRUE.equals(proxy.get("enabled")));
-        log.info("LLM request headers: Content-Type=application/json; Accept=application/json; Authorization={}", provider.equals("openai") ? "Bearer ***" : "not-used");
+        if (provider.equals("google")) {
+            log.info("LLM request headers: Content-Type=application/json; Accept=application/json; x-goog-api-key=***; Authorization=not-used");
+        } else {
+            log.info("LLM request headers: Content-Type=application/json; Accept=application/json; Authorization=Bearer ***");
+        }
         log.info("LLM request body FULL:\n{}", requestJson);
         log.info("==================== LLM REQUEST END ====================");
 
@@ -291,12 +297,49 @@ public class LlmClient {
         return "https://api.openai.com/v1/chat/completions";
     }
 
-    private String withGoogleKey(String endpoint, String apiKey) {
-        if (endpoint.contains("key=")) {
-            return endpoint;
+    private String resolveGoogleGenerateContentEndpoint(String endpoint, String model) {
+        String value = firstNonBlank(endpoint, defaultEndpoint("google"));
+        value = stripGoogleApiKeyFromUrl(value.trim());
+        value = value.replace("{model}", urlEncode(model));
+
+        if (value.contains(":generateContent")) {
+            return value;
         }
-        String separator = endpoint.contains("?") ? "&" : "?";
-        return endpoint + separator + "key=" + urlEncode(apiKey);
+
+        String query = "";
+        int queryIndex = value.indexOf('?');
+        if (queryIndex >= 0) {
+            query = value.substring(queryIndex);
+            value = value.substring(0, queryIndex);
+        }
+
+        while (value.endsWith("/")) {
+            value = value.substring(0, value.length() - 1);
+        }
+
+        if (value.endsWith("/models")) {
+            return value + "/" + urlEncode(model) + ":generateContent" + query;
+        }
+
+        if (value.matches(".*/models/[^/?]+$")) {
+            return value + ":generateContent" + query;
+        }
+
+        if (value.endsWith("/v1") || value.endsWith("/v1beta") || value.endsWith("/v1alpha")) {
+            return value + "/models/" + urlEncode(model) + ":generateContent" + query;
+        }
+
+        return value + "/models/" + urlEncode(model) + ":generateContent" + query;
+    }
+
+    private String stripGoogleApiKeyFromUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return url;
+        }
+        String cleaned = url.replaceAll("(?i)([?&])key=[^&]*&?", "$1");
+        cleaned = cleaned.replace("?&", "?");
+        cleaned = cleaned.replaceAll("[?&]$", "");
+        return cleaned;
     }
 
     private String toPrettyJson(Object value) {
