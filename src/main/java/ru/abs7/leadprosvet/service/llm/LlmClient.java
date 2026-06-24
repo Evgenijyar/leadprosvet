@@ -83,7 +83,7 @@ public class LlmClient {
         if (provider.equals("google")) {
             log.info("LLM Google Search grounding enabled: true");
         } else {
-            log.info("LLM OpenAI-compatible web plugin enabled: true");
+            log.info("LLM OpenAI-compatible web_search tool enabled: true");
         }
         log.info("LLM proxy enabled: {}", Boolean.TRUE.equals(proxy.get("enabled")));
         log.info("LLM request headers: Content-Type=application/json; Accept=application/json; Authorization={}", provider.equals("openai") ? "Bearer ***" : "not-used");
@@ -171,16 +171,20 @@ public class LlmClient {
                 Map.of("role", "user", "content", prompt)
         ));
 
-        // Web search plugin for OpenAI-compatible gateways that support Tokenator-style plugins.
+        // Web search for OpenAI-compatible gateways that support the Tokenator/OpenAPI tools format.
         // Example wire shape:
         // {
         //   "model": "gpt-5.5",
         //   "messages": [...],
-        //   "plugins": [{"id": "web"}]
+        //   "tools": [{"type": "web_search"}],
+        //   "web_search_options": {"search_context_size": "medium"},
+        //   "tool_choice": "auto"
         // }
         // This is deliberately applied only to the OpenAI-compatible payload branch.
         // Google keeps using its separate "tools": [{"google_search": {}}] format.
-        payload.put("plugins", List.of(Map.of("id", "web")));
+        payload.put("tools", List.of(Map.of("type", "web_search")));
+        payload.put("web_search_options", Map.of("search_context_size", "medium"));
+        payload.put("tool_choice", "auto");
 
         return payload;
     }
