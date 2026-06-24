@@ -17,13 +17,24 @@ const state = {
   }
 };
 
-const defaultPromptHtml = `
-<p>Собери краткую справку о компании для первого звонка менеджера.</p>
-<p>Данные из Bitrix24:</p>
-<p>Компания: ${tokenHtml({ id: 'COMPANY_TITLE', label: 'Компания' })}</p>
-<p>Сайт: ${tokenHtml({ id: 'WEB', label: 'Сайт' })}</p>
-<p>ИНН: ${tokenHtml({ id: 'UF_CRM_INN', label: 'ИНН' })}</p>
-<p>Нужно найти и структурировать: чем занимается компания, ключевые продукты/услуги, размер и география, если доступно, что важно знать перед первым звонком, возможные боли и первый заход для разговора.</p>`;
+const defaultPromptText = `Собери краткую справку о компании для первого звонка менеджера.
+
+Данные из Bitrix24:
+
+Компания: {{COMPANY_TITLE}}
+Сайт: {{WEB}}
+ИНН: {{UF_CRM_INN}}
+
+Нужно найти и структурировать: чем занимается компания, ключевые продукты/услуги, размер и география, если доступно, что важно знать перед первым звонком, возможные боли и первый заход для разговора.`;
+
+
+const defaultTokenLabels = {
+  COMPANY_TITLE: 'Компания',
+  WEB: 'Сайт',
+  UF_CRM_INN: 'ИНН'
+};
+
+const defaultPromptHtml = promptTextToHtml(defaultPromptText);
 
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('promptEditor').innerHTML = defaultPromptHtml;
@@ -127,6 +138,13 @@ function bindProxySwitch() {
 
 function bindPromptEditor() {
   const editor = document.getElementById('promptEditor');
+
+  editor.addEventListener('paste', event => {
+    event.preventDefault();
+    const text = normalizeClipboardText(event.clipboardData?.getData('text/plain') || '');
+    insertPlainTextAtCaret(text);
+    updateSerializedPrompt();
+  });
 
   editor.addEventListener('pointerup', event => {
     if (!event.target.closest('.token-remove')) {
@@ -358,14 +376,48 @@ function chipInnerHtml(field) {
 
 function serializePrompt() {
   const editor = document.getElementById('promptEditor');
-  const clone = editor.cloneNode(true);
-  clone.querySelectorAll('.prompt-token').forEach(token => {
-    const text = document.createTextNode(`{{${token.dataset.fieldId}}}`);
-    token.replaceWith(text);
+  return serializePromptNodes(editor.childNodes)
+    .replace(/\u00a0/g, ' ')
+    .replace(/\n$/, '');
+}
+
+function serializePromptNodes(nodes) {
+  let result = '';
+  nodes.forEach(node => {
+    result += serializePromptNode(node);
   });
-  return clone.innerText
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  return result;
+}
+
+function serializePromptNode(node) {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return node.nodeValue || '';
+  }
+
+  if (node.nodeType !== Node.ELEMENT_NODE) {
+    return '';
+  }
+
+  const element = node;
+  if (element.classList?.contains('prompt-token')) {
+    return `{{${element.dataset.fieldId || ''}}}`;
+  }
+
+  const tag = element.tagName;
+  if (tag === 'BR') {
+    return '\n';
+  }
+
+  const text = serializePromptNodes(element.childNodes);
+  if (isPromptBlockElement(tag)) {
+    return text + '\n';
+  }
+
+  return text;
+}
+
+function isPromptBlockElement(tag) {
+  return ['DIV', 'P', 'LI', 'SECTION', 'ARTICLE', 'BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(tag);
 }
 
 function updateSerializedPrompt() {
@@ -528,16 +580,87 @@ function setInputValue(id, value) {
 }
 
 function promptTextToHtml(text) {
-  const escaped = escapeHtml(text);
-  const withTokens = escaped.replace(/\{\{([A-Z0-9_]+)}}/g, (_, fieldId) => {
-    const field = state.fields.find(item => item.id === fieldId) || { id: fieldId, label: fieldId };
-    return tokenHtml(field);
-  });
-  return withTokens
-    .split(/\n{2,}/)
-    .map(part => `<p>${part.replace(/\n/g, '<br>')}</p>`)
-    .join('');
+  const source = String(text || '');
+  const tokenPattern = /\{\{([A-Z0-9_]+)}}/g;
+  let html = '';
+  let lastIndex = 0;
+  let match;
+
+  while ((match = tokenPattern.exec(source)) !== null) {
+    html += plainTextToEditorHtml(source.slice(lastIndex, match.index));
+    const fieldId = match[1];
+    const field = state.fields.find(item => item.id === fieldId) || { id: fieldId, label: defaultTokenLabels[fieldId] || fieldId };
+    html += tokenHtml(field);
+    lastIndex = match.index + match[0].length;
+  }
+
+  html += plainTextToEditorHtml(source.slice(lastIndex));
+  return html || '<br>';
 }
+
+function plainTextToEditorHtml(text) {
+  return escapeHtml(text).replace(/\n/g, '<br>');
+}
+
+function normalizeClipboardText(text) {
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\u0000/g, '');
+}
+
+function insertPlainTextAtCaret(text) {
+  const editor = document.getElementById('promptEditor');
+  editor.focus();
+
+  const selection = window.getSelection();
+  let range;
+  if (selection.rangeCount) {
+    range = selection.getRangeAt(0);
+  } else {
+    range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+
+  if (!editor.contains(range.commonAncestorContainer)) {
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+
+  const token = range.startContainer?.parentElement?.closest?.('.prompt-token');
+  if (token) {
+    range.setStartAfter(token);
+    range.setEndAfter(token);
+  }
+
+  const fragment = document.createDocumentFragment();
+  const lines = normalizeClipboardText(text).split('\n');
+  let lastNode = null;
+
+  lines.forEach((line, index) => {
+    if (index > 0) {
+      const br = document.createElement('br');
+      fragment.appendChild(br);
+      lastNode = br;
+    }
+    if (line.length > 0) {
+      const textNode = document.createTextNode(line);
+      fragment.appendChild(textNode);
+      lastNode = textNode;
+    }
+  });
+
+  if (!lastNode) return;
+
+  range.deleteContents();
+  range.insertNode(fragment);
+  range.setStartAfter(lastNode);
+  range.setEndAfter(lastNode);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
 
 function setValue(id, value) {
   if (value === undefined || value === null) return;
