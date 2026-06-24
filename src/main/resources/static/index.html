@@ -26,6 +26,32 @@
                 <span id="serviceToggleHint">Вебхуки обрабатываются</span>
             </div>
         </div>
+
+        <div class="header-proxy-card" id="proxyHeaderCard" title="Общий proxy для всех LLM-запросов">
+            <label class="switch compact-switch" aria-label="Использовать proxy">
+                <input id="useProxy" type="checkbox">
+                <span class="slider"></span>
+            </label>
+            <div class="header-proxy-body">
+                <strong>Использовать proxy</strong>
+                <input id="proxyUrl" type="text" placeholder="http://login:password@host:port" disabled>
+            </div>
+        </div>
+
+        <div class="header-trigger-card" title="Событие Bitrix24, которое ставит лид в очередь">
+            <div class="header-trigger-title">Триггер срабатывания</div>
+            <div class="header-trigger-options" role="radiogroup" aria-label="Событие запуска обработки лида">
+                <label class="trigger-option compact">
+                    <input type="radio" name="leadTriggerEvent" value="ONCRMLEADADD" checked>
+                    <span>Новый лид</span>
+                </label>
+                <label class="trigger-option compact">
+                    <input type="radio" name="leadTriggerEvent" value="ONCRMLEADUPDATE">
+                    <span>Изменение лида</span>
+                </label>
+            </div>
+            <button class="small-button trigger-apply-btn" id="applyWebhookModeBtn" type="button">Применить</button>
+        </div>
     </header>
 
     <main class="workspace">
@@ -77,6 +103,67 @@
                 </div>
             </div>
 
+            <div class="tab-panel" id="tab-llm">
+                <div class="llm-model-grid">
+                    <aside class="llm-model-list-panel">
+                        <div class="panel-heading compact-heading">
+                            <div>
+                                <h2>Сохранённые LLM-модели</h2>
+                                <p>Галочка означает активную модель для обработки очереди.</p>
+                            </div>
+                        </div>
+                        <div class="llm-model-list" id="llmModelList"></div>
+                        <button class="primary-button add-model-button" id="addLlmModelBtn" type="button">+ Добавить модель</button>
+                    </aside>
+
+                    <section class="llm-model-editor-panel">
+                        <div class="panel-heading compact-heading">
+                            <div>
+                                <h2 id="llmEditorTitle">Настройка модели</h2>
+                                <p>У активной модели используется endpoint, ID модели и все добавленные ключи.</p>
+                            </div>
+                            <button class="primary-button" id="saveLlmBtn" type="button">Сохранить</button>
+                        </div>
+
+                        <div class="llm-editor-scroll">
+                            <label class="form-field">
+                                <span>Название модели в ЛидПросвете</span>
+                                <input id="llmProfileName" type="text" placeholder="Например: Gemma 4 Search #1">
+                            </label>
+
+                            <div class="llm-provider-row">
+                                <span class="form-label">Тип API</span>
+                                <div class="provider-switch" role="group" aria-label="Провайдер LLM">
+                                    <button class="provider-button active" data-provider="openai" type="button">OpenAPI</button>
+                                    <button class="provider-button" data-provider="google" type="button">Google API</button>
+                                </div>
+                            </div>
+
+                            <div class="form-grid single compact-form-grid">
+                                <label class="form-field">
+                                    <span>Endpoint URL</span>
+                                    <input id="endpointUrl" type="text" value="https://api.openai.com/v1/chat/completions">
+                                </label>
+                                <label class="form-field">
+                                    <span>ID модели</span>
+                                    <input id="modelId" type="text" value="gpt-4.1-mini">
+                                </label>
+                            </div>
+
+                            <div class="api-keys-card model-keys-card">
+                                <div class="api-keys-head">
+                                    <div>
+                                        <span class="api-keys-title">API-ключи активной модели</span>
+                                        <small>Сколько ключей указано у активной модели, столько параллельных обработчиков очереди будет запущено.</small>
+                                    </div>
+                                    <button class="small-button" id="addApiKeyBtn" type="button">+ ключ</button>
+                                </div>
+                                <div class="api-key-list" id="apiKeyList"></div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div>
 
             <div class="tab-panel" id="tab-queue">
                 <section class="queue-panel">
@@ -88,24 +175,17 @@
                         <div class="queue-stats" id="queueStats">Ожидание: 0 · В работе: 0 · Ключей: 0</div>
                     </div>
 
-                    <div class="queue-controls">
-                        <label class="form-field">
-                            <span>Колонка 1</span>
-                            <select id="queueFieldOne"></select>
-                        </label>
-                        <label class="form-field">
-                            <span>Колонка 2</span>
-                            <select id="queueFieldTwo"></select>
-                        </label>
-                    </div>
-
                     <div class="queue-table-wrap">
                         <table class="queue-table">
                             <thead>
                             <tr>
                                 <th class="queue-num-col">№</th>
-                                <th id="queueFieldOneTitle">Колонка 1</th>
-                                <th id="queueFieldTwoTitle">Колонка 2</th>
+                                <th class="queue-dynamic-head">
+                                    <select id="queueFieldOne" aria-label="Колонка 1"></select>
+                                </th>
+                                <th class="queue-dynamic-head">
+                                    <select id="queueFieldTwo" aria-label="Колонка 2"></select>
+                                </th>
                                 <th class="queue-attempt-col">Попытка</th>
                                 <th class="queue-status-col">Статус</th>
                             </tr>
@@ -118,103 +198,6 @@
                         </table>
                     </div>
                 </section>
-            </div>
-
-            <div class="tab-panel" id="tab-llm">
-                <div class="llm-grid">
-                    <section class="settings-panel">
-                        <div class="panel-heading compact-heading">
-                            <div>
-                                <h2>Провайдер и модель</h2>
-                                <p>Формат запроса будет зависеть от выбранного API.</p>
-                            </div>
-                        </div>
-
-                        <div class="provider-switch" role="group" aria-label="Провайдер LLM">
-                            <button class="provider-button active" data-provider="openai" type="button">OpenAPI</button>
-                            <button class="provider-button" data-provider="google" type="button">Google API</button>
-                        </div>
-
-                        <div class="trigger-mode-card">
-                            <div>
-                                <h3>Когда запускать обработку лида</h3>
-                                <p>Одновременно в Bitrix24 будет привязан только один вебхук: либо новый лид, либо изменение лида.</p>
-                            </div>
-                            <div class="trigger-mode-options" role="radiogroup" aria-label="Событие запуска обработки лида">
-                                <label class="trigger-option">
-                                    <input type="radio" name="leadTriggerEvent" value="ONCRMLEADADD" checked>
-                                    <span>Новый лид</span>
-                                </label>
-                                <label class="trigger-option">
-                                    <input type="radio" name="leadTriggerEvent" value="ONCRMLEADUPDATE">
-                                    <span>Изменение лида</span>
-                                </label>
-                            </div>
-                            <button class="small-button" id="applyWebhookModeBtn" type="button">Применить вебхук в Bitrix</button>
-                        </div>
-
-                        <div class="form-grid single">
-                            <label class="form-field">
-                                <span>Endpoint URL</span>
-                                <input id="endpointUrl" type="text" value="https://api.openai.com/v1/chat/completions">
-                            </label>
-                            <label class="form-field">
-                                <span>ID модели</span>
-                                <input id="modelId" type="text" value="gpt-4.1-mini">
-                            </label>
-                            <div class="api-keys-card">
-                                <div class="api-keys-head">
-                                    <div>
-                                        <span class="api-keys-title">API-ключи</span>
-                                        <small>Сколько ключей добавлено, столько параллельных обработчиков очереди будет запущено.</small>
-                                    </div>
-                                    <button class="small-button" id="addApiKeyBtn" type="button">+ ключ</button>
-                                </div>
-                                <div class="api-key-list" id="apiKeyList"></div>
-                            </div>
-                        </div>
-                    </section>
-
-                    <section class="settings-panel proxy-panel">
-                        <div class="proxy-title-row">
-                            <label class="switch">
-                                <input id="useProxy" type="checkbox">
-                                <span class="slider"></span>
-                            </label>
-                            <div>
-                                <h2>Использовать Proxy</h2>
-                                <p>Если включено, LLM-запросы будут отправляться через указанный proxy.</p>
-                            </div>
-                        </div>
-
-                        <div class="proxy-fields disabled" id="proxyFields">
-                            <div class="form-row">
-                                <label class="form-field">
-                                    <span>Proxy host / IP</span>
-                                    <input id="proxyHost" type="text" placeholder="127.0.0.1" disabled>
-                                </label>
-                                <label class="form-field proxy-port-field">
-                                    <span>Proxy port</span>
-                                    <input id="proxyPort" type="number" placeholder="8080" disabled>
-                                </label>
-                            </div>
-                            <div class="form-row">
-                                <label class="form-field">
-                                    <span>Логин</span>
-                                    <input id="proxyLogin" type="text" placeholder="proxy-user" disabled>
-                                </label>
-                                <label class="form-field">
-                                    <span>Пароль</span>
-                                    <input id="proxyPassword" type="password" placeholder="proxy-password" disabled>
-                                </label>
-                            </div>
-                        </div>
-
-                        <div class="save-row">
-                            <button class="primary-button" id="saveLlmBtn" type="button">Сохранить LLM-настройки</button>
-                        </div>
-                    </section>
-                </div>
             </div>
         </section>
     </main>

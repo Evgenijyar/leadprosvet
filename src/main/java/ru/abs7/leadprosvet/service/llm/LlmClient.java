@@ -12,6 +12,7 @@ import java.net.InetSocketAddress;
 import java.net.PasswordAuthentication;
 import java.net.ProxySelector;
 import java.net.URI;
+import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -130,6 +131,11 @@ public class LlmClient {
     }
 
     public String currentProvider(Map<String, Object> settings) {
+        Map<String, Object> activeModel = activeLlmModel(settings);
+        String modelProvider = stringValue(activeModel.get("provider"));
+        if (modelProvider != null && !modelProvider.isBlank()) {
+            return normalizeProvider(modelProvider);
+        }
         return normalizeProvider(firstNonBlank(
                 stringValue(settings.get("provider")),
                 stringValue(nestedMap(settings.get("llm")).get("provider")),
@@ -172,17 +178,53 @@ public class LlmClient {
     }
 
     private Map<String, Object> effectiveLlmProfile(Map<String, Object> settings, String provider) {
+        String normalizedProvider = normalizeProvider(provider);
+        Map<String, Object> activeModel = activeLlmModel(settings);
+        String activeProvider = normalizeProvider(stringValue(activeModel.get("provider")));
+        if (!activeModel.isEmpty() && activeProvider.equals(normalizedProvider)) {
+            return activeModel;
+        }
+
         Map<String, Object> profiles = nestedMap(settings.get("llmProfiles"));
-        Map<String, Object> profile = nestedMap(profiles.get(provider));
+        Map<String, Object> profile = nestedMap(profiles.get(normalizedProvider));
         if (!profile.isEmpty()) {
             return profile;
         }
 
         // Backward compatibility with older settings schema where only one `llm` object existed.
         Map<String, Object> oldLlm = nestedMap(settings.get("llm"));
-        String oldProvider = normalizeProvider(firstNonBlank(stringValue(oldLlm.get("provider")), stringValue(settings.get("provider")), provider));
-        if (oldProvider.equals(provider) && !oldLlm.isEmpty()) {
+        String oldProvider = normalizeProvider(firstNonBlank(stringValue(oldLlm.get("provider")), stringValue(settings.get("provider")), normalizedProvider));
+        if (oldProvider.equals(normalizedProvider) && !oldLlm.isEmpty()) {
             return oldLlm;
+        }
+        return new LinkedHashMap<>();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> activeLlmModel(Map<String, Object> settings) {
+        Object modelsValue = settings.get("llmModels");
+        if (!(modelsValue instanceof List<?> models) || models.isEmpty()) {
+            return new LinkedHashMap<>();
+        }
+
+        String activeId = stringValue(settings.get("activeLlmModelId"));
+        if (activeId != null && !activeId.isBlank()) {
+            for (Object item : models) {
+                if (item instanceof Map<?, ?> model && activeId.equals(stringValue(model.get("id")))) {
+                    return (Map<String, Object>) model;
+                }
+            }
+        }
+
+        for (Object item : models) {
+            if (item instanceof Map<?, ?> model && booleanValue(model.get("active"), false)) {
+                return (Map<String, Object>) model;
+            }
+        }
+
+        Object first = models.getFirst();
+        if (first instanceof Map<?, ?> model) {
+            return (Map<String, Object>) model;
         }
         return new LinkedHashMap<>();
     }
@@ -196,24 +238,77 @@ public class LlmClient {
                 .connectTimeout(Duration.ofSeconds(40))
                 .followRedirects(HttpClient.Redirect.NORMAL);
 
-        if (Boolean.TRUE.equals(proxy.get("enabled"))) {
-            String host = stringValue(proxy.get("host"));
-            int port = intValue(proxy.get("port"), 0);
-            if (host != null && !host.isBlank() && port > 0) {
-                builder.proxy(ProxySelector.of(new InetSocketAddress(host.trim(), port)));
-                String login = stringValue(proxy.get("login"));
-                String password = stringValue(proxy.get("password"));
-                if (login != null && !login.isBlank()) {
-                    builder.authenticator(new Authenticator() {
-                        @Override
-                        protected PasswordAuthentication getPasswordAuthentication() {
-                            return new PasswordAuthentication(login, password == null ? new char[0] : password.toCharArray());
-                        }
-                    });
-                }
+        ProxyConfig proxyConfig = proxyConfig(proxy);
+        if (proxyConfig.enabled() && proxyConfig.host() != null && !proxyConfig.host().isBlank() && proxyConfig.port() > 0) {
+            builder.proxy(ProxySelector.of(new InetSocketAddress(proxyConfig.host().trim(), proxyConfig.port())));
+            if (proxyConfig.login() != null && !proxyConfig.login().isBlank()) {
+                builder.authenticator(new Authenticator() {
+                    @Override
+                    protected PasswordAuthentication getPasswordAuthentication() {
+                        String password = proxyConfig.password() == null ? "" : proxyConfig.password();
+                        return new PasswordAuthentication(proxyConfig.login(), password.toCharArray());
+                    }
+                });
             }
         }
         return builder.build();
+    }
+
+    private ProxyConfig proxyConfig(Map<String, Object> proxy) {
+        boolean enabled = booleanValue(proxy.get("enabled"), false);
+        if (!enabled) {
+            return new ProxyConfig(false, null, 0, null, null);
+        }
+
+        String url = stringValue(proxy.get("url"));
+        if (url != null && !url.isBlank()) {
+            ProxyConfig parsed = parseProxyUrl(url.trim());
+            if (parsed.host() != null && parsed.port() > 0) {
+                return parsed;
+            }
+        }
+
+        String host = stringValue(proxy.get("host"));
+        int port = intValue(proxy.get("port"), 0);
+        String login = stringValue(proxy.get("login"));
+        String password = stringValue(proxy.get("password"));
+        return new ProxyConfig(enabled, host, port, login, password);
+    }
+
+    private ProxyConfig parseProxyUrl(String raw) {
+        String value = raw.trim();
+        try {
+            URI uri = URI.create(value.contains("://") ? value : "http://" + value);
+            String host = uri.getHost();
+            int port = uri.getPort();
+            String login = null;
+            String password = null;
+            String userInfo = uri.getRawUserInfo();
+            if (userInfo != null && !userInfo.isBlank()) {
+                String decoded = URLDecoder.decode(userInfo, StandardCharsets.UTF_8);
+                int separator = decoded.indexOf(':');
+                if (separator >= 0) {
+                    login = decoded.substring(0, separator);
+                    password = decoded.substring(separator + 1);
+                } else {
+                    login = decoded;
+                }
+            }
+            if (host != null && port > 0) {
+                return new ProxyConfig(true, host, port, login, password);
+            }
+        } catch (IllegalArgumentException ignored) {
+            // Fall through to legacy host:port:login:password parser.
+        }
+
+        String[] parts = value.replaceFirst("^[a-zA-Z][a-zA-Z0-9+.-]*://", "").split(":", 4);
+        if (parts.length >= 2) {
+            int port = intValue(parts[1], 0);
+            String login = parts.length >= 3 ? parts[2] : null;
+            String password = parts.length >= 4 ? parts[3] : null;
+            return new ProxyConfig(true, parts[0], port, login, password);
+        }
+        return new ProxyConfig(true, null, 0, null, null);
     }
 
     private Map<String, Object> openAiPayload(String model, String prompt) {
@@ -510,6 +605,20 @@ public class LlmClient {
         return value == null ? null : String.valueOf(value);
     }
 
+    private boolean booleanValue(Object value, boolean fallback) {
+        if (value == null) {
+            return fallback;
+        }
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isBlank()) {
+            return fallback;
+        }
+        return "true".equalsIgnoreCase(text) || "1".equals(text) || "yes".equalsIgnoreCase(text) || "on".equalsIgnoreCase(text);
+    }
+
     private int intValue(Object value, int fallback) {
         if (value == null) {
             return fallback;
@@ -559,6 +668,9 @@ public class LlmClient {
         public boolean retryable() {
             return statusCode == 408 || statusCode == 429 || statusCode >= 500;
         }
+    }
+
+    private record ProxyConfig(boolean enabled, String host, int port, String login, String password) {
     }
 
     public record ApiKeySlot(String provider, int index, String apiKey) {

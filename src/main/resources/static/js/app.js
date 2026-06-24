@@ -3,21 +3,15 @@ const state = {
   provider: 'openai',
   drag: null,
   serviceEnabled: true,
-  llmProfiles: {
-    openai: {
-      endpointUrl: 'https://api.openai.com/v1/chat/completions',
-      modelId: 'gpt-4.1-mini',
-      apiKey: '',
-      apiKeys: ['']
-    },
-    google: {
-      endpointUrl: 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
-      modelId: 'gemini-2.5-flash',
-      apiKey: '',
-      apiKeys: ['']
-    }
+  proxy: {
+    enabled: false,
+    url: ''
   },
-  queueTimer: null
+  llmModels: [],
+  activeLlmModelId: null,
+  selectedLlmModelId: null,
+  queueTimer: null,
+  saveProxyTimer: null
 };
 
 const defaultPromptHtml = `
@@ -32,11 +26,14 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('promptEditor').innerHTML = defaultPromptHtml;
   bindTabs();
   bindServiceSwitch();
+  bindProxyHeader();
   bindProviderSwitch();
-  bindProxySwitch();
   bindPromptEditor();
   bindButtons();
   bindQueuePage();
+  ensureDefaultLlmModels();
+  renderLlmModelList();
+  fillModelEditorFromState();
   loadFields().then(loadCurrentSettings);
   updateSerializedPrompt();
   startQueuePolling();
@@ -53,7 +50,6 @@ function bindTabs() {
     });
   });
 }
-
 
 function bindServiceSwitch() {
   const checkbox = document.getElementById('serviceEnabled');
@@ -83,7 +79,7 @@ function updateServiceToggleView() {
 
   card.classList.toggle('disabled', !state.serviceEnabled);
   title.textContent = state.serviceEnabled ? 'Сервис включён' : 'Сервис выключен';
-  hint.textContent = state.serviceEnabled ? 'Вебхуки обрабатываются' : 'Обработка вебхуков приостановлена';
+  hint.textContent = state.serviceEnabled ? 'Вебхуки обрабатываются' : 'Обработка приостановлена';
 }
 
 async function saveServiceEnabled(enabled) {
@@ -104,30 +100,57 @@ async function saveServiceEnabled(enabled) {
   }
 }
 
+function bindProxyHeader() {
+  const checkbox = document.getElementById('useProxy');
+  const input = document.getElementById('proxyUrl');
+  if (!checkbox || !input) return;
+
+  checkbox.addEventListener('change', () => {
+    state.proxy.enabled = checkbox.checked;
+    input.disabled = !checkbox.checked;
+    updateProxyView();
+    scheduleProxyAutosave();
+  });
+
+  input.addEventListener('input', () => {
+    state.proxy.url = input.value;
+    scheduleProxyAutosave();
+  });
+
+  updateProxyView();
+}
+
+function updateProxyView() {
+  const card = document.getElementById('proxyHeaderCard');
+  const checkbox = document.getElementById('useProxy');
+  const input = document.getElementById('proxyUrl');
+  if (checkbox) checkbox.checked = Boolean(state.proxy.enabled);
+  if (input) {
+    input.value = state.proxy.url || '';
+    input.disabled = !state.proxy.enabled;
+  }
+  if (card) card.classList.toggle('enabled', Boolean(state.proxy.enabled));
+}
+
+function scheduleProxyAutosave() {
+  clearTimeout(state.saveProxyTimer);
+  state.saveProxyTimer = setTimeout(() => saveSettings('proxy', { quiet: true }), 650);
+}
+
 function bindProviderSwitch() {
   document.querySelectorAll('.provider-button').forEach(button => {
     button.addEventListener('click', () => {
-      const nextProvider = normalizeProvider(button.dataset.provider);
-      if (nextProvider === state.provider) return;
-
-      saveCurrentProviderFormToState();
-      state.provider = nextProvider;
+      const model = selectedLlmModel();
+      if (!model) return;
+      saveCurrentModelFormToState();
+      const previousProvider = model.provider;
+      model.provider = normalizeProvider(button.dataset.provider);
+      applyProviderDefaultsForSwitch(model, previousProvider);
+      state.provider = model.provider;
       updateProviderButtons();
-      fillProviderFormFromState();
-      showToast(state.provider === 'google'
-        ? 'Загружены сохранённые настройки Google API'
-        : 'Загружены сохранённые настройки OpenAPI');
+      fillModelEditorFromState();
+      renderLlmModelList();
     });
-  });
-}
-
-function bindProxySwitch() {
-  const checkbox = document.getElementById('useProxy');
-  const proxyFields = document.getElementById('proxyFields');
-  const inputs = proxyFields.querySelectorAll('input');
-  checkbox.addEventListener('change', () => {
-    proxyFields.classList.toggle('disabled', !checkbox.checked);
-    inputs.forEach(input => input.disabled = !checkbox.checked);
   });
 }
 
@@ -173,9 +196,22 @@ function bindButtons() {
   document.getElementById('saveLlmBtn').addEventListener('click', () => saveSettings('llm'));
   document.getElementById('applyWebhookModeBtn')?.addEventListener('click', applyWebhookMode);
   document.getElementById('addApiKeyBtn')?.addEventListener('click', () => {
-    const profile = currentProviderProfile();
-    profile.apiKeys = cleanApiKeys([...profileApiKeys(profile), '']);
-    renderApiKeyInputs(profile.apiKeys);
+    const model = selectedLlmModel();
+    if (!model) return;
+    saveCurrentModelFormToState();
+    model.apiKeys = cleanApiKeys([...profileApiKeys(model), '']);
+    renderApiKeyInputs(model.apiKeys);
+    renderLlmModelList();
+  });
+  document.getElementById('addLlmModelBtn')?.addEventListener('click', addLlmModel);
+  document.getElementById('llmProfileName')?.addEventListener('input', () => {
+    saveCurrentModelFormToState();
+    renderLlmModelList();
+  });
+  document.getElementById('endpointUrl')?.addEventListener('input', saveCurrentModelFormToState);
+  document.getElementById('modelId')?.addEventListener('input', () => {
+    saveCurrentModelFormToState();
+    renderLlmModelList();
   });
 
   document.addEventListener('pointermove', onPointerMove);
@@ -359,7 +395,6 @@ function insertPromptToken(field) {
   selection.addRange(range);
 }
 
-
 function insertPlainTextAtCaret(text) {
   const editor = document.getElementById('promptEditor');
   editor.focus();
@@ -445,7 +480,6 @@ function updateSerializedPrompt() {
   document.getElementById('serializedPrompt').value = serializePrompt();
 }
 
-
 async function loadCurrentSettings() {
   try {
     const response = await fetch('/api/settings/current');
@@ -455,13 +489,6 @@ async function loadCurrentSettings() {
 
     setServiceEnabled(settings.serviceEnabled !== false);
 
-    if (settings.provider) {
-      state.provider = settings.provider;
-      document.querySelectorAll('.provider-button').forEach(button => {
-        button.classList.toggle('active', button.dataset.provider === state.provider);
-      });
-    }
-
     if (settings.promptTemplate) {
       document.getElementById('promptEditor').innerHTML = promptTextToHtml(String(settings.promptTemplate));
       renderFields();
@@ -469,18 +496,16 @@ async function loadCurrentSettings() {
 
     setLeadTriggerEvent(settings.leadTriggerEvent || 'ONCRMLEADADD');
 
-    loadProviderProfilesFromSettings(settings);
-    updateProviderButtons();
-    fillProviderFormFromState();
+    loadLlmModelsFromSettings(settings);
+    renderLlmModelList();
+    fillModelEditorFromState();
 
     const proxy = settings.proxy || {};
-    const useProxy = document.getElementById('useProxy');
-    useProxy.checked = Boolean(proxy.enabled);
-    useProxy.dispatchEvent(new Event('change'));
-    setValue('proxyHost', proxy.host);
-    setValue('proxyPort', proxy.port);
-    setValue('proxyLogin', proxy.login);
-    setValue('proxyPassword', proxy.password);
+    state.proxy = {
+      enabled: Boolean(proxy.enabled),
+      url: proxyUrlFromSettings(proxy)
+    };
+    updateProxyView();
 
     updateSerializedPrompt();
   } catch (error) {
@@ -488,41 +513,276 @@ async function loadCurrentSettings() {
   }
 }
 
-
-function loadProviderProfilesFromSettings(settings) {
-  const savedProfiles = settings.llmProfiles || settings.llmByProvider || {};
-
-  ['openai', 'google'].forEach(provider => {
-    const saved = savedProfiles[provider] || {};
-    state.llmProfiles[provider] = {
-      ...state.llmProfiles[provider],
-      ...cleanProviderProfile(saved, provider)
-    };
-  });
-
-  // Compatibility with older settings where only one `llm` block existed.
-  const oldLlm = settings.llm || {};
-  const oldProvider = normalizeProvider(oldLlm.provider || settings.provider || state.provider);
-  if (oldLlm.endpointUrl || oldLlm.modelId || oldLlm.apiKey || oldLlm.apiKeys) {
-    state.llmProfiles[oldProvider] = {
-      ...state.llmProfiles[oldProvider],
-      ...cleanProviderProfile(oldLlm, oldProvider)
-    };
+function proxyUrlFromSettings(proxy) {
+  if (proxy.url) return String(proxy.url);
+  const host = String(proxy.host || '').trim();
+  const port = String(proxy.port || '').trim();
+  const login = String(proxy.login || '').trim();
+  const password = String(proxy.password || '').trim();
+  if (!host || !port) return '';
+  if (login) {
+    return `http://${encodeURIComponent(login)}:${encodeURIComponent(password)}@${host}:${port}`;
   }
-
-  state.provider = normalizeProvider(settings.provider || oldLlm.provider || state.provider);
+  return `${host}:${port}`;
 }
 
-function cleanProviderProfile(profile, provider) {
-  const defaults = defaultProviderProfile(provider);
-  const keys = apiKeysFromSavedProfile(profile);
+function ensureDefaultLlmModels() {
+  if (state.llmModels.length) return;
+  const openai = createDefaultLlmModel('openai', { name: 'OpenAPI основная', active: true });
+  const google = createDefaultLlmModel('google', { name: 'Google API основная' });
+  state.llmModels = [openai, google];
+  state.activeLlmModelId = openai.id;
+  state.selectedLlmModelId = openai.id;
+  state.provider = openai.provider;
+}
+
+function createDefaultLlmModel(provider, overrides = {}) {
+  const normalized = normalizeProvider(provider);
+  const defaults = defaultProviderProfile(normalized);
   return {
-    provider,
-    endpointUrl: nonBlank(profile.endpointUrl, defaults.endpointUrl),
-    modelId: nonBlank(profile.modelId, defaults.modelId),
-    apiKey: keys[0] || '',
-    apiKeys: keys.length ? keys : ['']
+    id: overrides.id || newModelId(),
+    name: overrides.name || (normalized === 'google' ? 'Google API модель' : 'OpenAPI модель'),
+    provider: normalized,
+    endpointUrl: defaults.endpointUrl,
+    modelId: defaults.modelId,
+    apiKey: '',
+    apiKeys: [''],
+    active: Boolean(overrides.active)
   };
+}
+
+function loadLlmModelsFromSettings(settings) {
+  const models = [];
+  const rawModels = Array.isArray(settings.llmModels) ? settings.llmModels : [];
+
+  rawModels.forEach((item, index) => {
+    const normalized = cleanLlmModel(item, index);
+    if (normalized) models.push(normalized);
+  });
+
+  if (!models.length) {
+    const savedProfiles = settings.llmProfiles || settings.llmByProvider || {};
+    ['openai', 'google'].forEach(provider => {
+      const saved = savedProfiles[provider] || {};
+      const hasAnyData = Boolean(saved.endpointUrl || saved.modelId || saved.apiKey || saved.apiKeys);
+      if (hasAnyData) {
+        models.push(cleanLlmModel({
+          ...saved,
+          id: `profile-${provider}`,
+          name: provider === 'google' ? 'Google API основная' : 'OpenAPI основная',
+          provider
+        }, models.length));
+      }
+    });
+  }
+
+  const oldLlm = settings.llm || {};
+  if (!models.length && (oldLlm.endpointUrl || oldLlm.modelId || oldLlm.apiKey || oldLlm.apiKeys)) {
+    models.push(cleanLlmModel({
+      ...oldLlm,
+      id: 'profile-current',
+      name: oldLlm.provider === 'google' ? 'Google API основная' : 'OpenAPI основная'
+    }, 0));
+  }
+
+  state.llmModels = models.filter(Boolean);
+  ensureDefaultLlmModels();
+
+  const activeId = String(settings.activeLlmModelId || '').trim();
+  const activeById = state.llmModels.find(model => model.id === activeId);
+  const activeByFlag = state.llmModels.find(model => model.active);
+  const active = activeById || activeByFlag || state.llmModels[0];
+  setActiveLlmModel(active.id, { silent: true });
+  state.selectedLlmModelId = active.id;
+}
+
+function cleanLlmModel(source, index = 0) {
+  if (!source || typeof source !== 'object') return null;
+  const provider = normalizeProvider(source.provider);
+  const defaults = defaultProviderProfile(provider);
+  const id = String(source.id || source.profileId || `model-${provider}-${index + 1}`).trim();
+  const keys = apiKeysFromSavedProfile(source);
+  return {
+    id,
+    name: nonBlank(source.name || source.title || source.displayName, provider === 'google' ? 'Google API модель' : 'OpenAPI модель'),
+    provider,
+    endpointUrl: nonBlank(source.endpointUrl, defaults.endpointUrl),
+    modelId: nonBlank(source.modelId, defaults.modelId),
+    apiKey: keys.find(Boolean) || '',
+    apiKeys: keys.length ? keys : [''],
+    active: Boolean(source.active)
+  };
+}
+
+function addLlmModel() {
+  saveCurrentModelFormToState();
+  const provider = normalizeProvider(state.provider);
+  const model = createDefaultLlmModel(provider, {
+    name: provider === 'google' ? `Google API ${state.llmModels.filter(item => item.provider === 'google').length + 1}` : `OpenAPI ${state.llmModels.filter(item => item.provider === 'openai').length + 1}`
+  });
+  state.llmModels.push(model);
+  state.selectedLlmModelId = model.id;
+  renderLlmModelList();
+  fillModelEditorFromState();
+}
+
+function selectedLlmModel() {
+  ensureDefaultLlmModels();
+  let model = state.llmModels.find(item => item.id === state.selectedLlmModelId);
+  if (!model) {
+    model = state.llmModels.find(item => item.id === state.activeLlmModelId) || state.llmModels[0];
+    state.selectedLlmModelId = model.id;
+  }
+  return model;
+}
+
+function activeLlmModel() {
+  ensureDefaultLlmModels();
+  return state.llmModels.find(item => item.id === state.activeLlmModelId) || state.llmModels[0];
+}
+
+function setActiveLlmModel(modelId, options = {}) {
+  const model = state.llmModels.find(item => item.id === modelId);
+  if (!model) return;
+  state.activeLlmModelId = model.id;
+  state.provider = model.provider;
+  state.llmModels.forEach(item => item.active = item.id === model.id);
+  if (!options.keepSelection) {
+    state.selectedLlmModelId = model.id;
+  }
+  if (!options.silent) {
+    renderLlmModelList();
+    fillModelEditorFromState();
+  }
+}
+
+function renderLlmModelList() {
+  const list = document.getElementById('llmModelList');
+  if (!list) return;
+  ensureDefaultLlmModels();
+  const active = activeLlmModel();
+
+  list.innerHTML = state.llmModels.map(model => {
+    const selected = model.id === state.selectedLlmModelId;
+    const isActive = model.id === active.id;
+    const keys = profileApiKeys(model).filter(Boolean).length;
+    return `
+      <div class="llm-model-card ${selected ? 'selected' : ''} ${isActive ? 'active' : ''}" data-model-id="${escapeHtml(model.id)}">
+        <label class="model-active-mark" title="Сделать активной">
+          <input class="model-active-radio" type="radio" name="activeLlmModel" value="${escapeHtml(model.id)}" ${isActive ? 'checked' : ''}>
+          <span></span>
+        </label>
+        <button class="model-main-button" type="button">
+          <strong>${escapeHtml(model.name || model.modelId || 'LLM модель')}</strong>
+          <small>${model.provider === 'google' ? 'Google API' : 'OpenAPI'} · ${escapeHtml(model.modelId || 'модель не указана')} · ключей: ${keys}</small>
+        </button>
+        <button class="model-delete-button" type="button" title="Удалить модель">×</button>
+      </div>
+    `;
+  }).join('');
+
+  list.querySelectorAll('.llm-model-card').forEach(card => {
+    const id = card.dataset.modelId;
+    card.querySelector('.model-main-button')?.addEventListener('click', () => {
+      saveCurrentModelFormToState();
+      state.selectedLlmModelId = id;
+      renderLlmModelList();
+      fillModelEditorFromState();
+    });
+    card.querySelector('.model-active-radio')?.addEventListener('change', async () => {
+      saveCurrentModelFormToState();
+      setActiveLlmModel(id, { keepSelection: false });
+      renderLlmModelList();
+      fillModelEditorFromState();
+      await saveSettings('llm', { quiet: true });
+      showToast('Активная LLM-модель изменена');
+    });
+    card.querySelector('.model-delete-button')?.addEventListener('click', async event => {
+      event.stopPropagation();
+      if (state.llmModels.length <= 1) {
+        showToast('Нельзя удалить единственную модель');
+        return;
+      }
+      const deletedActive = state.activeLlmModelId === id;
+      state.llmModels = state.llmModels.filter(model => model.id !== id);
+      if (deletedActive) setActiveLlmModel(state.llmModels[0].id, { silent: true });
+      state.selectedLlmModelId = state.activeLlmModelId;
+      renderLlmModelList();
+      fillModelEditorFromState();
+      await saveSettings('llm', { quiet: true });
+      showToast('Модель удалена');
+    });
+  });
+}
+
+function saveCurrentModelFormToState() {
+  const model = selectedLlmModel();
+  if (!model) return;
+  const apiKeys = cleanApiKeys(readApiKeysFromForm());
+  model.name = document.getElementById('llmProfileName')?.value || model.name || '';
+  model.endpointUrl = document.getElementById('endpointUrl')?.value || '';
+  model.modelId = document.getElementById('modelId')?.value || '';
+  model.apiKeys = apiKeys;
+  model.apiKey = firstRealApiKey(apiKeys);
+  model.active = model.id === state.activeLlmModelId;
+  if (model.active) state.provider = model.provider;
+}
+
+function fillModelEditorFromState() {
+  const model = selectedLlmModel();
+  if (!model) return;
+  state.provider = model.provider;
+  setInputValue('llmProfileName', model.name);
+  setInputValue('endpointUrl', model.endpointUrl);
+  setInputValue('modelId', model.modelId);
+  renderApiKeyInputs(profileApiKeys(model));
+  updateProviderButtons();
+  const title = document.getElementById('llmEditorTitle');
+  if (title) title.textContent = model.id === state.activeLlmModelId ? 'Настройка активной модели' : 'Настройка модели';
+}
+
+function updateProviderButtons() {
+  const model = selectedLlmModel();
+  const provider = model ? model.provider : state.provider;
+  document.querySelectorAll('.provider-button').forEach(button => {
+    button.classList.toggle('active', normalizeProvider(button.dataset.provider) === provider);
+  });
+}
+
+function serializeLlmModels() {
+  saveCurrentModelFormToState();
+  return state.llmModels.map(model => ({
+    id: model.id,
+    name: model.name || '',
+    provider: normalizeProvider(model.provider),
+    endpointUrl: model.endpointUrl || '',
+    modelId: model.modelId || '',
+    apiKey: firstRealApiKey(profileApiKeys(model)),
+    apiKeys: cleanApiKeys(profileApiKeys(model)).filter(Boolean),
+    apiKeyPresent: Boolean(firstRealApiKey(profileApiKeys(model))),
+    apiKeyCount: cleanApiKeys(profileApiKeys(model)).filter(Boolean).length,
+    active: model.id === state.activeLlmModelId
+  }));
+}
+
+function serializeLlmProfiles() {
+  const result = {};
+  ['openai', 'google'].forEach(provider => {
+    const activeForProvider = state.llmModels.find(model => model.provider === provider && model.id === state.activeLlmModelId);
+    const firstForProvider = state.llmModels.find(model => model.provider === provider);
+    const model = activeForProvider || firstForProvider || createDefaultLlmModel(provider);
+    const keys = cleanApiKeys(profileApiKeys(model)).filter(Boolean);
+    result[provider] = {
+      provider,
+      endpointUrl: model.endpointUrl || '',
+      modelId: model.modelId || '',
+      apiKey: keys[0] || '',
+      apiKeys: keys,
+      apiKeyPresent: keys.length > 0,
+      apiKeyCount: keys.length
+    };
+  });
+  return result;
 }
 
 function defaultProviderProfile(provider) {
@@ -543,56 +803,14 @@ function defaultProviderProfile(provider) {
       };
 }
 
-function currentProviderProfile() {
-  const provider = normalizeProvider(state.provider);
-  if (!state.llmProfiles[provider]) {
-    state.llmProfiles[provider] = defaultProviderProfile(provider);
-  }
-  return state.llmProfiles[provider];
+function applyProviderDefaultsForSwitch(model, previousProvider) {
+  const defaults = defaultProviderProfile(model.provider);
+  const previousDefaults = defaultProviderProfile(previousProvider);
+  const endpoint = String(model.endpointUrl || '').trim();
+  const modelId = String(model.modelId || '').trim();
+  if (!endpoint || endpoint === previousDefaults.endpointUrl) model.endpointUrl = defaults.endpointUrl;
+  if (!modelId || modelId === previousDefaults.modelId) model.modelId = defaults.modelId;
 }
-
-function saveCurrentProviderFormToState() {
-  const provider = normalizeProvider(state.provider);
-  const apiKeys = cleanApiKeys(readApiKeysFromForm());
-  state.llmProfiles[provider] = {
-    provider,
-    endpointUrl: document.getElementById('endpointUrl')?.value || '',
-    modelId: document.getElementById('modelId')?.value || '',
-    apiKey: firstRealApiKey(apiKeys),
-    apiKeys
-  };
-}
-
-function fillProviderFormFromState() {
-  const profile = currentProviderProfile();
-  setInputValue('endpointUrl', profile.endpointUrl);
-  setInputValue('modelId', profile.modelId);
-  renderApiKeyInputs(profileApiKeys(profile));
-}
-
-function updateProviderButtons() {
-  document.querySelectorAll('.provider-button').forEach(button => {
-    button.classList.toggle('active', normalizeProvider(button.dataset.provider) === state.provider);
-  });
-}
-
-function serializeLlmProfiles() {
-  const result = {};
-  ['openai', 'google'].forEach(provider => {
-    const profile = state.llmProfiles[provider] || defaultProviderProfile(provider);
-    result[provider] = {
-      provider,
-      endpointUrl: profile.endpointUrl || '',
-      modelId: profile.modelId || '',
-      apiKey: firstRealApiKey(profileApiKeys(profile)),
-      apiKeys: cleanApiKeys(profileApiKeys(profile)).filter(Boolean),
-      apiKeyPresent: Boolean(firstRealApiKey(profileApiKeys(profile))),
-      apiKeyCount: cleanApiKeys(profileApiKeys(profile)).filter(Boolean).length
-    };
-  });
-  return result;
-}
-
 
 function apiKeysFromSavedProfile(profile) {
   if (Array.isArray(profile.apiKeys)) {
@@ -635,14 +853,18 @@ function renderApiKeyInputs(keys) {
       <input class="api-key-input" type="password" value="${escapeHtml(key)}" placeholder="API-ключ #${index + 1}">
       <button class="api-key-remove" type="button" title="Удалить ключ">×</button>
     `;
-    row.querySelector('.api-key-input').addEventListener('input', () => saveCurrentProviderFormToState());
+    row.querySelector('.api-key-input').addEventListener('input', () => {
+      saveCurrentModelFormToState();
+      renderLlmModelList();
+    });
     row.querySelector('.api-key-remove').addEventListener('click', () => {
       const current = readApiKeysFromForm();
       current.splice(index, 1);
-      const profile = currentProviderProfile();
-      profile.apiKeys = cleanApiKeys(current.length ? current : ['']);
-      profile.apiKey = firstRealApiKey(profile.apiKeys);
-      renderApiKeyInputs(profile.apiKeys);
+      const model = selectedLlmModel();
+      model.apiKeys = cleanApiKeys(current.length ? current : ['']);
+      model.apiKey = firstRealApiKey(model.apiKeys);
+      renderApiKeyInputs(model.apiKeys);
+      renderLlmModelList();
     });
     list.appendChild(row);
   });
@@ -656,6 +878,10 @@ function normalizeProvider(value) {
 function nonBlank(value, fallback) {
   const text = value === undefined || value === null ? '' : String(value).trim();
   return text || fallback;
+}
+
+function newModelId() {
+  return `llm-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
 }
 
 function setInputValue(id, value) {
@@ -672,41 +898,34 @@ function promptTextToHtml(text) {
   return withTokens.replace(/\n/g, '<br>');
 }
 
-function setValue(id, value) {
-  if (value === undefined || value === null) return;
-  const element = document.getElementById(id);
-  if (element) element.value = value;
-}
-
-async function saveSettings(section) {
+async function saveSettings(section, options = {}) {
   updateSerializedPrompt();
-  saveCurrentProviderFormToState();
-
-  const currentProfile = currentProviderProfile();
-  const currentApiKeys = cleanApiKeys(profileApiKeys(currentProfile)).filter(Boolean);
+  saveCurrentModelFormToState();
+  const activeModel = activeLlmModel();
+  const activeKeys = cleanApiKeys(profileApiKeys(activeModel)).filter(Boolean);
+  const llmProfiles = serializeLlmProfiles();
   const payload = {
     section,
-    provider: state.provider,
+    provider: activeModel.provider,
     serviceEnabled: state.serviceEnabled,
+    activeLlmModelId: activeModel.id,
     promptTemplate: serializePrompt(),
+    llmModels: serializeLlmModels(),
     llm: {
-      provider: state.provider,
-      endpointUrl: currentProfile.endpointUrl,
-      modelId: currentProfile.modelId,
-      apiKey: currentApiKeys[0] || '',
-      apiKeys: currentApiKeys,
-      apiKeyPresent: currentApiKeys.length > 0,
-      apiKeyCount: currentApiKeys.length
+      provider: activeModel.provider,
+      endpointUrl: activeModel.endpointUrl,
+      modelId: activeModel.modelId,
+      apiKey: activeKeys[0] || '',
+      apiKeys: activeKeys,
+      apiKeyPresent: activeKeys.length > 0,
+      apiKeyCount: activeKeys.length
     },
-    llmProfiles: serializeLlmProfiles(),
+    llmProfiles,
     leadTriggerEvent: currentLeadTriggerEvent(),
     proxy: {
-      enabled: document.getElementById('useProxy').checked,
-      host: document.getElementById('proxyHost').value,
-      port: document.getElementById('proxyPort').value,
-      login: document.getElementById('proxyLogin').value,
-      password: document.getElementById('proxyPassword').value,
-      passwordPresent: Boolean(document.getElementById('proxyPassword').value)
+      enabled: Boolean(state.proxy.enabled),
+      url: state.proxy.url || '',
+      passwordPresent: Boolean(extractProxyPasswordHint(state.proxy.url))
     }
   };
 
@@ -717,15 +936,21 @@ async function saveSettings(section) {
       body: JSON.stringify(payload)
     });
     const result = await response.json();
-    showToast(result.ok ? 'Настройки сохранены' : (result.message || 'Настройки сохранены'));
+    if (!options.quiet) showToast(result.ok ? 'Настройки сохранены' : (result.message || 'Настройки сохранены'));
   } catch (error) {
-    showToast('Ошибка сохранения: ' + error.message);
+    if (!options.quiet) showToast('Ошибка сохранения: ' + error.message);
   }
 }
 
+function extractProxyPasswordHint(url) {
+  const text = String(url || '');
+  if (!text.includes('@')) return '';
+  const auth = text.split('@')[0].replace(/^\w+:\/\//, '');
+  return auth.includes(':') ? auth.split(':').slice(1).join(':') : '';
+}
 
 async function applyWebhookMode() {
-  await saveSettings('llm');
+  await saveSettings('trigger', { quiet: true });
   try {
     const response = await fetch('/api/bitrix/setup/run', {
       method: 'POST',
@@ -753,7 +978,6 @@ function setLeadTriggerEvent(value) {
   });
 }
 
-
 function bindQueuePage() {
   document.getElementById('queueFieldOne')?.addEventListener('change', () => {
     saveQueueColumnSelection();
@@ -772,10 +996,11 @@ function renderQueueFieldSelectors() {
 
   const savedOne = localStorage.getItem('leadprosvet.queueFieldOne') || 'ID';
   const savedTwo = localStorage.getItem('leadprosvet.queueFieldTwo') || 'TITLE';
-  const fields = [
+  const fields = uniqueFields([
     { id: 'ID', label: 'ID лида', group: 'Системное' },
+    { id: 'TITLE', label: 'Название лида', group: 'Системное' },
     ...state.fields
-  ];
+  ]);
 
   [first, second].forEach(select => {
     const current = select === first ? savedOne : savedTwo;
@@ -784,7 +1009,15 @@ function renderQueueFieldSelectors() {
     ).join('');
     select.value = fields.some(field => field.id === current) ? current : (select === first ? 'ID' : 'TITLE');
   });
-  updateQueueColumnTitles();
+}
+
+function uniqueFields(fields) {
+  const seen = new Set();
+  return fields.filter(field => {
+    if (seen.has(field.id)) return false;
+    seen.add(field.id);
+    return true;
+  });
 }
 
 function saveQueueColumnSelection() {
@@ -792,21 +1025,6 @@ function saveQueueColumnSelection() {
   const second = document.getElementById('queueFieldTwo')?.value || 'TITLE';
   localStorage.setItem('leadprosvet.queueFieldOne', first);
   localStorage.setItem('leadprosvet.queueFieldTwo', second);
-  updateQueueColumnTitles();
-}
-
-function updateQueueColumnTitles() {
-  const one = document.getElementById('queueFieldOne')?.value || 'ID';
-  const two = document.getElementById('queueFieldTwo')?.value || 'TITLE';
-  const oneTitle = document.getElementById('queueFieldOneTitle');
-  const twoTitle = document.getElementById('queueFieldTwoTitle');
-  if (oneTitle) oneTitle.textContent = queueFieldLabel(one);
-  if (twoTitle) twoTitle.textContent = queueFieldLabel(two);
-}
-
-function queueFieldLabel(id) {
-  const field = [{ id: 'ID', label: 'ID лида' }, ...state.fields].find(item => item.id === id);
-  return field ? `${field.label || field.id}` : id;
 }
 
 function startQueuePolling() {
@@ -820,7 +1038,6 @@ async function refreshRealtimeQueue() {
   if (!body) return;
   const first = document.getElementById('queueFieldOne')?.value || 'ID';
   const second = document.getElementById('queueFieldTwo')?.value || 'TITLE';
-  updateQueueColumnTitles();
   try {
     const url = `/api/bitrix/queue/realtime?firstFieldId=${encodeURIComponent(first)}&secondFieldId=${encodeURIComponent(second)}`;
     const response = await fetch(url, { cache: 'no-store' });
