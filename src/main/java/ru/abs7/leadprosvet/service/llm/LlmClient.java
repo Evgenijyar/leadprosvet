@@ -79,6 +79,9 @@ public class LlmClient {
         log.info("LLM provider: {}", provider);
         log.info("LLM endpoint: {}", maskUrl(resolvedEndpoint));
         log.info("LLM model: {}", model);
+        if (provider.equals("google")) {
+            log.info("LLM Google Search grounding enabled: true");
+        }
         log.info("LLM proxy enabled: {}", Boolean.TRUE.equals(proxy.get("enabled")));
         log.info("LLM request headers: Content-Type=application/json; Accept=application/json; Authorization={}", provider.equals("openai") ? "Bearer ***" : "not-used");
         log.info("LLM request body FULL:\n{}", requestJson);
@@ -148,7 +151,19 @@ public class LlmClient {
     }
 
     private Map<String, Object> googlePayload(String prompt) {
-        return Map.of("contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))));
+
+        // Grounding with Google Search for Gemini API generateContent.
+        // Official REST shape:
+        // {
+        //   "contents": [{"parts": [{"text": "..."}]}],
+        //   "tools": [{"google_search": {}}]
+        // }
+        // This is not a prompt instruction. This is the actual tool switch in the JSON request.
+        payload.put("tools", List.of(Map.of("google_search", Map.of())));
+
+        return payload;
     }
 
     @SuppressWarnings("unchecked")
