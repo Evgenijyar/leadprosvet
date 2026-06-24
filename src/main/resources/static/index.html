@@ -33,13 +33,13 @@
                 <span class="slider"></span>
             </label>
             <div class="header-proxy-body">
-                <strong>Использовать proxy</strong>
+                <strong>Proxy</strong>
                 <input id="proxyUrl" type="text" placeholder="http://login:password@host:port" disabled>
             </div>
         </div>
 
         <div class="header-trigger-card" title="Событие Bitrix24, которое ставит лид в очередь">
-            <div class="header-trigger-title">Триггер срабатывания</div>
+            <div class="header-trigger-title">Триггер</div>
             <div class="header-trigger-options" role="radiogroup" aria-label="Событие запуска обработки лида">
                 <label class="trigger-option compact">
                     <input type="radio" name="leadTriggerEvent" value="ONCRMLEADADD" checked>
@@ -50,7 +50,7 @@
                     <span>Изменение лида</span>
                 </label>
             </div>
-            <button class="small-button trigger-apply-btn" id="applyWebhookModeBtn" type="button">Применить</button>
+            <button class="small-button trigger-apply-btn" id="applyWebhookModeBtn" type="button" title="Применить вебхук Bitrix24" aria-label="Применить вебхук Bitrix24">✓</button>
         </div>
     </header>
 
@@ -95,10 +95,6 @@
 
                         <div class="prompt-editor" id="promptEditor" contenteditable="true" spellcheck="true"></div>
 
-                        <div class="template-preview">
-                            <div class="preview-title">Технический шаблон</div>
-                            <textarea id="serializedPrompt" readonly></textarea>
-                        </div>
                     </section>
                 </div>
             </div>
@@ -117,32 +113,23 @@
                     </aside>
 
                     <section class="llm-model-editor-panel">
-                        <div class="panel-heading compact-heading">
-                            <div>
+                        <div class="panel-heading compact-heading llm-editor-header">
+                            <div class="llm-editor-header-text">
                                 <h2 id="llmEditorTitle">Настройка модели</h2>
-                                <p>У активной модели используется endpoint, ID модели и все добавленные ключи.</p>
+                                <p>У активной модели используются endpoint, ID модели и все добавленные ключи.</p>
                             </div>
-                            <button class="primary-button" id="saveLlmBtn" type="button">Сохранить</button>
+                            <div class="provider-switch compact-provider-switch" role="group" aria-label="Провайдер LLM">
+                                <button class="provider-button active" data-provider="openai" type="button">OpenAPI</button>
+                                <button class="provider-button" data-provider="google" type="button">Google API</button>
+                            </div>
+                            <button class="primary-button save-llm-button" id="saveLlmBtn" type="button">Сохранить</button>
                         </div>
 
                         <div class="llm-editor-scroll">
-                            <label class="form-field">
-                                <span>Название модели в ЛидПросвете</span>
-                                <input id="llmProfileName" type="text" placeholder="Например: Gemma 4 Search #1">
-                            </label>
-
-                            <div class="llm-provider-row">
-                                <span class="form-label">Тип API</span>
-                                <div class="provider-switch" role="group" aria-label="Провайдер LLM">
-                                    <button class="provider-button active" data-provider="openai" type="button">OpenAPI</button>
-                                    <button class="provider-button" data-provider="google" type="button">Google API</button>
-                                </div>
-                            </div>
-
-                            <div class="form-grid single compact-form-grid">
+                            <div class="form-row llm-name-model-row">
                                 <label class="form-field">
-                                    <span>Endpoint URL</span>
-                                    <input id="endpointUrl" type="text" value="https://api.openai.com/v1/chat/completions">
+                                    <span>Название модели</span>
+                                    <input id="llmProfileName" type="text" placeholder="Например: Gemma 4 Search #1">
                                 </label>
                                 <label class="form-field">
                                     <span>ID модели</span>
@@ -150,15 +137,18 @@
                                 </label>
                             </div>
 
-                            <div class="api-keys-card model-keys-card">
-                                <div class="api-keys-head">
-                                    <div>
-                                        <span class="api-keys-title">API-ключи активной модели</span>
-                                        <small>Сколько ключей указано у активной модели, столько параллельных обработчиков очереди будет запущено.</small>
-                                    </div>
-                                    <button class="small-button" id="addApiKeyBtn" type="button">+ ключ</button>
+                            <label class="form-field">
+                                <span>Endpoint URL</span>
+                                <input id="endpointUrl" type="text" value="https://api.openai.com/v1/chat/completions">
+                            </label>
+
+                            <div class="api-keys-inline">
+                                <div class="api-keys-inline-head">
+                                    <span class="api-keys-title">API-ключи активной модели</span>
+                                    <small>Сколько ключей указано, столько параллельных обработчиков очереди будет запущено.</small>
                                 </div>
                                 <div class="api-key-list" id="apiKeyList"></div>
+                                <button class="small-button add-api-key-inline" id="addApiKeyBtn" type="button">+ ключ</button>
                             </div>
                         </div>
                     </section>

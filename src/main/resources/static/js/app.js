@@ -477,7 +477,8 @@ function htmlToPlainTextPreservingBreaks(root) {
 }
 
 function updateSerializedPrompt() {
-  document.getElementById('serializedPrompt').value = serializePrompt();
+  const serialized = document.getElementById('serializedPrompt');
+  if (serialized) serialized.value = serializePrompt();
 }
 
 async function loadCurrentSettings() {

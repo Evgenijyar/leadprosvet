@@ -1106,3 +1106,156 @@ h2 { margin: 0; font-size: 20px; letter-spacing: -.035em; }
     .llm-provider-row { align-items: flex-start; flex-direction: column; }
     .queue-dynamic-head { min-width: 180px; }
 }
+
+/* Compact header refinements */
+.header-proxy-card {
+    flex: 0 1 330px;
+    min-width: 255px;
+}
+
+.header-proxy-body {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 8px;
+}
+
+.header-proxy-body strong {
+    min-width: 44px;
+}
+
+.header-proxy-body input {
+    height: 34px;
+    padding: 7px 9px;
+}
+
+.header-trigger-card {
+    flex: 0 1 455px;
+    min-width: 390px;
+    grid-template-columns: auto minmax(0, auto) 38px;
+    column-gap: 8px;
+}
+
+.trigger-apply-btn {
+    width: 36px;
+    height: 34px;
+    min-width: 36px;
+    padding: 0;
+    display: inline-grid;
+    place-items: center;
+    font-size: 17px;
+    line-height: 1;
+}
+
+.trigger-option.compact {
+    padding: 7px 8px;
+}
+
+/* Integration: prompt gets the whole right panel, technical textarea removed */
+.prompt-panel .prompt-editor {
+    flex: 1 1 auto;
+}
+
+/* Compact active model editor */
+.llm-editor-header {
+    align-items: center;
+    gap: 10px;
+}
+
+.llm-editor-header-text {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.llm-editor-header-text p {
+    max-width: 620px;
+}
+
+.compact-provider-switch {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 3px;
+    background: transparent;
+    border-color: transparent;
+}
+
+.compact-provider-switch .provider-button {
+    padding: 8px 12px;
+    font-size: 13px;
+}
+
+.compact-provider-switch .provider-button.active {
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    box-shadow: none;
+}
+
+.save-llm-button {
+    flex: 0 0 auto;
+}
+
+.llm-name-model-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.llm-editor-scroll {
+    gap: 12px;
+}
+
+.api-keys-inline {
+    display: grid;
+    gap: 10px;
+    min-height: 0;
+    padding-top: 2px;
+}
+
+.api-keys-inline-head {
+    display: grid;
+    gap: 3px;
+}
+
+.api-keys-inline-head small {
+    display: block;
+    color: var(--muted);
+    line-height: 1.35;
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.api-keys-inline .api-key-list {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+}
+
+.add-api-key-inline {
+    justify-self: center;
+    min-width: 120px;
+}
+
+.api-keys-card.model-keys-card {
+    display: contents;
+}
+
+.model-keys-card .api-key-list {
+    max-height: none;
+}
+
+@media (max-width: 1300px) {
+    .header-proxy-card { flex: 1 1 280px; }
+    .header-trigger-card { flex: 1 1 455px; }
+}
+
+@media (max-width: 900px) {
+    .llm-editor-header {
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+    .compact-provider-switch {
+        order: 2;
+    }
+    .save-llm-button {
+        order: 3;
+    }
+    .llm-name-model-row {
+        grid-template-columns: 1fr;
+    }
+}

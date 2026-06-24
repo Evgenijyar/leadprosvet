@@ -5,10 +5,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import ru.abs7.leadprosvet.domain.BitrixPortal;
 import ru.abs7.leadprosvet.domain.IncomingBitrixEvent;
 import ru.abs7.leadprosvet.domain.LeadProcessingJob;
 import ru.abs7.leadprosvet.repository.LeadProcessingJobRepository;
 import ru.abs7.leadprosvet.service.JsonStorageService;
+import ru.abs7.leadprosvet.service.bitrix.BitrixPortalService;
+import ru.abs7.leadprosvet.service.bitrix.BitrixRestClient;
 import ru.abs7.leadprosvet.service.bitrix.LeadTriggerModeService;
 import ru.abs7.leadprosvet.service.llm.LlmClient;
 import tools.jackson.core.JacksonException;
@@ -29,6 +32,8 @@ public class LeadProcessingQueueService {
 
     private final LeadProcessingJobRepository jobRepository;
     private final LeadTriggerModeService triggerModeService;
+    private final BitrixPortalService bitrixPortalService;
+    private final BitrixRestClient bitrixRestClient;
     private final JsonStorageService jsonStorageService;
     private final LlmClient llmClient;
     private final ObjectMapper objectMapper;
@@ -36,12 +41,16 @@ public class LeadProcessingQueueService {
     public LeadProcessingQueueService(
             LeadProcessingJobRepository jobRepository,
             LeadTriggerModeService triggerModeService,
+            BitrixPortalService bitrixPortalService,
+            BitrixRestClient bitrixRestClient,
             JsonStorageService jsonStorageService,
             LlmClient llmClient,
             ObjectMapper objectMapper
     ) {
         this.jobRepository = jobRepository;
         this.triggerModeService = triggerModeService;
+        this.bitrixPortalService = bitrixPortalService;
+        this.bitrixRestClient = bitrixRestClient;
         this.jsonStorageService = jsonStorageService;
         this.llmClient = llmClient;
         this.objectMapper = objectMapper;
@@ -137,11 +146,12 @@ public class LeadProcessingQueueService {
         return result;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public Map<String, Object> realtime(String firstFieldId, String secondFieldId) {
         Map<String, Object> settings = jsonStorageService.getJsonSetting(SETTINGS_KEY);
         List<LlmClient.ApiKeySlot> slots = llmClient.apiKeySlots(settings);
         List<LeadProcessingJob> jobs = jobRepository.findAllByStatusInOrderByIdAsc(List.of("PROCESSING", "PENDING"), Pageable.ofSize(500));
+        hydrateMissingLeadSnapshots(jobs, firstFieldId, secondFieldId);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ok", true);
@@ -154,6 +164,54 @@ public class LeadProcessingQueueService {
         result.put("secondFieldId", value(secondFieldId));
         result.put("jobs", jobs.stream().map(job -> realtimeView(job, firstFieldId, secondFieldId)).toList());
         return result;
+    }
+
+
+    private void hydrateMissingLeadSnapshots(List<LeadProcessingJob> jobs, String firstFieldId, String secondFieldId) {
+        if (!requiresLeadSnapshot(firstFieldId) && !requiresLeadSnapshot(secondFieldId)) {
+            return;
+        }
+        List<LeadProcessingJob> missing = jobs.stream()
+                .filter(job -> job.getLeadSnapshotJson() == null || job.getLeadSnapshotJson().isBlank())
+                .toList();
+        if (missing.isEmpty()) {
+            return;
+        }
+
+        BitrixPortal portal;
+        try {
+            portal = bitrixPortalService.currentPortalOrThrow();
+        } catch (RuntimeException e) {
+            log.warn("Cannot hydrate realtime queue lead snapshots: {}", e.getMessage());
+            return;
+        }
+
+        for (LeadProcessingJob job : missing) {
+            try {
+                Map<String, Object> leadPayload = bitrixRestClient.call(portal, "crm.lead.get", Map.of("id", job.getLeadId()));
+                Object result = leadPayload.get("result");
+                if (!(result instanceof Map<?, ?> leadRaw)) {
+                    log.warn("Cannot hydrate realtime queue row: crm.lead.get returned empty lead for id={}", job.getLeadId());
+                    continue;
+                }
+                Map<String, Object> lead = new LinkedHashMap<>();
+                leadRaw.forEach((key, value) -> lead.put(String.valueOf(key), value));
+                job.setLeadSnapshotJson(toPrettyJson(lead));
+                job.setUpdatedAt(OffsetDateTime.now());
+                jobRepository.save(job);
+                log.info("Realtime queue lead snapshot hydrated: jobId={}, leadId={}", job.getId(), job.getLeadId());
+            } catch (RuntimeException e) {
+                log.warn("Cannot hydrate realtime queue row: jobId={}, leadId={}, error={}", job.getId(), job.getLeadId(), e.getMessage());
+            }
+        }
+    }
+
+    private boolean requiresLeadSnapshot(String fieldId) {
+        if (fieldId == null || fieldId.isBlank()) {
+            return false;
+        }
+        String key = fieldId.trim();
+        return !("ID".equalsIgnoreCase(key) || "LEAD_ID".equalsIgnoreCase(key));
     }
 
     private boolean isServiceEnabled() {
@@ -267,5 +325,13 @@ public class LeadProcessingQueueService {
 
     private String value(Object value) {
         return value == null ? "" : String.valueOf(value);
+    }
+
+    private String toPrettyJson(Object value) {
+        try {
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(value);
+        } catch (JacksonException e) {
+            return String.valueOf(value);
+        }
     }
 }
