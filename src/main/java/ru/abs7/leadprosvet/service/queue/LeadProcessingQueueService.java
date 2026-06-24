@@ -8,6 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 import ru.abs7.leadprosvet.domain.IncomingBitrixEvent;
 import ru.abs7.leadprosvet.domain.LeadProcessingJob;
 import ru.abs7.leadprosvet.repository.LeadProcessingJobRepository;
+import ru.abs7.leadprosvet.service.JsonStorageService;
 import ru.abs7.leadprosvet.service.bitrix.LeadTriggerModeService;
 
 import java.time.OffsetDateTime;
@@ -19,14 +20,21 @@ import java.util.Set;
 public class LeadProcessingQueueService {
 
     private static final Logger log = LoggerFactory.getLogger(LeadProcessingQueueService.class);
+    private static final String SETTINGS_KEY = "leadprosvet.settings";
     private static final Set<String> ACTIVE_STATUSES = Set.of("PENDING", "PROCESSING");
 
     private final LeadProcessingJobRepository jobRepository;
     private final LeadTriggerModeService triggerModeService;
+    private final JsonStorageService jsonStorageService;
 
-    public LeadProcessingQueueService(LeadProcessingJobRepository jobRepository, LeadTriggerModeService triggerModeService) {
+    public LeadProcessingQueueService(
+            LeadProcessingJobRepository jobRepository,
+            LeadTriggerModeService triggerModeService,
+            JsonStorageService jsonStorageService
+    ) {
         this.jobRepository = jobRepository;
         this.triggerModeService = triggerModeService;
+        this.jsonStorageService = jsonStorageService;
     }
 
     @Transactional
@@ -35,6 +43,14 @@ public class LeadProcessingQueueService {
         result.put("eventLogId", event.getId());
         result.put("eventName", event.getEventName());
         result.put("leadId", event.getEntityId());
+
+        if (!isServiceEnabled()) {
+            result.put("queued", false);
+            result.put("reason", "service_disabled");
+            log.info("Bitrix event {} ignored because LeadProsvet service is disabled, eventLogId={}, leadId={}",
+                    event.getEventName(), event.getId(), event.getEntityId());
+            return result;
+        }
 
         if (!triggerModeService.isSupported(event.getEventName())) {
             result.put("queued", false);
@@ -99,10 +115,28 @@ public class LeadProcessingQueueService {
         result.put("processing", jobRepository.countByStatus("PROCESSING"));
         result.put("done", jobRepository.countByStatus("DONE"));
         result.put("failed", jobRepository.countByStatus("FAILED"));
+        result.put("serviceEnabled", isServiceEnabled());
         result.put("selectedEvent", triggerModeService.currentEvent());
         result.put("selectedEventLabel", triggerModeService.label(triggerModeService.currentEvent()));
         result.put("latest", jobRepository.findAllByOrderByIdDesc(Pageable.ofSize(20)).stream().map(this::view).toList());
         return result;
+    }
+
+
+    private boolean isServiceEnabled() {
+        Map<String, Object> settings = jsonStorageService.getJsonSetting(SETTINGS_KEY);
+        Object value = settings.get("serviceEnabled");
+        if (value == null) {
+            return true;
+        }
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isBlank()) {
+            return true;
+        }
+        return "true".equalsIgnoreCase(text) || "1".equals(text) || "yes".equalsIgnoreCase(text) || "on".equalsIgnoreCase(text);
     }
 
     private Map<String, Object> view(LeadProcessingJob job) {

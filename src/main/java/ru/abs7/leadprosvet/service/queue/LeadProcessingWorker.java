@@ -36,6 +36,7 @@ public class LeadProcessingWorker {
     private final JsonStorageService jsonStorageService;
     private final LlmClient llmClient;
     private final ObjectMapper objectMapper;
+    private boolean disabledWorkerLogPrinted;
 
     public LeadProcessingWorker(
             LeadProcessingJobRepository jobRepository,
@@ -55,7 +56,32 @@ public class LeadProcessingWorker {
 
     @Scheduled(fixedDelayString = "${app.queue.worker-delay-ms:1500}")
     public synchronized void processNextJob() {
+        if (!isServiceEnabled()) {
+            if (!disabledWorkerLogPrinted) {
+                log.info("Lead processing worker paused: LeadProsvet service is disabled");
+                disabledWorkerLogPrinted = true;
+            }
+            return;
+        }
+        disabledWorkerLogPrinted = false;
         jobRepository.firstPending().ifPresent(this::processJobSafely);
+    }
+
+
+    private boolean isServiceEnabled() {
+        Map<String, Object> settings = jsonStorageService.getJsonSetting(SETTINGS_KEY);
+        Object value = settings.get("serviceEnabled");
+        if (value == null) {
+            return true;
+        }
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isBlank()) {
+            return true;
+        }
+        return "true".equalsIgnoreCase(text) || "1".equals(text) || "yes".equalsIgnoreCase(text) || "on".equalsIgnoreCase(text);
     }
 
     private void processJobSafely(LeadProcessingJob job) {

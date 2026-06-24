@@ -1,7 +1,8 @@
 const state = {
   fields: [],
   provider: 'openai',
-  drag: null
+  drag: null,
+  serviceEnabled: true
 };
 
 const defaultPromptHtml = `
@@ -15,6 +16,7 @@ const defaultPromptHtml = `
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('promptEditor').innerHTML = defaultPromptHtml;
   bindTabs();
+  bindServiceSwitch();
   bindProviderSwitch();
   bindProxySwitch();
   bindPromptEditor();
@@ -32,6 +34,56 @@ function bindTabs() {
       document.getElementById(`tab-${button.dataset.tab}`).classList.add('active');
     });
   });
+}
+
+
+function bindServiceSwitch() {
+  const checkbox = document.getElementById('serviceEnabled');
+  if (!checkbox) return;
+
+  checkbox.addEventListener('change', async () => {
+    const enabled = checkbox.checked;
+    setServiceEnabled(enabled);
+    await saveServiceEnabled(enabled);
+  });
+
+  updateServiceToggleView();
+}
+
+function setServiceEnabled(enabled) {
+  state.serviceEnabled = enabled !== false;
+  const checkbox = document.getElementById('serviceEnabled');
+  if (checkbox) checkbox.checked = state.serviceEnabled;
+  updateServiceToggleView();
+}
+
+function updateServiceToggleView() {
+  const card = document.getElementById('serviceToggleCard');
+  const title = document.getElementById('serviceToggleTitle');
+  const hint = document.getElementById('serviceToggleHint');
+  if (!card || !title || !hint) return;
+
+  card.classList.toggle('disabled', !state.serviceEnabled);
+  title.textContent = state.serviceEnabled ? 'Сервис включён' : 'Сервис выключен';
+  hint.textContent = state.serviceEnabled ? 'Вебхуки обрабатываются' : 'Обработка вебхуков приостановлена';
+}
+
+async function saveServiceEnabled(enabled) {
+  try {
+    const response = await fetch('/api/settings/service-enabled', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok === false) {
+      throw new Error(result.message || `HTTP ${response.status}`);
+    }
+    showToast(enabled ? 'Сервис включён: вебхуки будут обрабатываться' : 'Сервис выключен: вебхуки будут игнорироваться');
+  } catch (error) {
+    setServiceEnabled(!enabled);
+    showToast('Не удалось изменить состояние сервиса: ' + error.message);
+  }
 }
 
 function bindProviderSwitch() {
@@ -126,11 +178,9 @@ async function loadFields() {
 function renderFields() {
   const query = document.getElementById('fieldSearch').value.trim().toLowerCase();
   const list = document.getElementById('fieldList');
-  const used = usedFieldIds();
   list.innerHTML = '';
 
   state.fields
-    .filter(field => !used.has(field.id))
     .filter(field => !query || `${field.id} ${field.label} ${field.group}`.toLowerCase().includes(query))
     .forEach(field => {
       const chip = document.createElement('div');
@@ -248,11 +298,6 @@ function placeCaretFromPoint(x, y) {
 }
 
 function insertPromptToken(field) {
-  if (usedFieldIds().has(field.id)) {
-    showToast(`Поле «${field.label}» уже добавлено в промпт`);
-    return;
-  }
-
   const editor = document.getElementById('promptEditor');
   editor.focus();
 
@@ -325,6 +370,8 @@ async function loadCurrentSettings() {
     const settings = await response.json();
     if (!settings || Object.keys(settings).length === 0) return;
 
+    setServiceEnabled(settings.serviceEnabled !== false);
+
     if (settings.provider) {
       state.provider = settings.provider;
       document.querySelectorAll('.provider-button').forEach(button => {
@@ -382,6 +429,7 @@ async function saveSettings(section) {
   const payload = {
     section,
     provider: state.provider,
+    serviceEnabled: state.serviceEnabled,
     promptTemplate: serializePrompt(),
     llm: {
       provider: state.provider,
