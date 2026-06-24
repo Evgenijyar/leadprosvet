@@ -81,15 +81,41 @@ public class LeadProcessingWorker {
             log.info("Lead job DONE: jobId={}, leadId={}", job.getId(), job.getLeadId());
         } catch (Exception e) {
             OffsetDateTime failedAt = OffsetDateTime.now();
-            job.setStatus(job.getAttempt() >= 3 ? "FAILED" : "PENDING");
+            captureLlmFailurePayload(job, e);
+
+            boolean retryable = isRetryableFailure(e);
+            job.setStatus(retryable && job.getAttempt() < 3 ? "PENDING" : "FAILED");
             job.setLastError(e.getMessage());
             job.setFinishedAt(failedAt);
             job.setUpdatedAt(failedAt);
             jobRepository.save(job);
-            log.error("Lead job failed: jobId={}, leadId={}, nextStatus={}, error={}", job.getId(), job.getLeadId(), job.getStatus(), e.getMessage(), e);
+
+            log.error("Lead job failed: jobId={}, leadId={}, retryable={}, nextStatus={}, error={}",
+                    job.getId(), job.getLeadId(), retryable, job.getStatus(), e.getMessage(), e);
         } finally {
             log.info("==================== LEAD JOB END ====================");
         }
+    }
+
+    private void captureLlmFailurePayload(LeadProcessingJob job, Exception e) {
+        if (e instanceof LlmClient.LlmHttpException llmHttpException) {
+            job.setLlmRequest(llmHttpException.requestJson());
+            job.setLlmResponse(llmHttpException.responseBody());
+        }
+    }
+
+    private boolean isRetryableFailure(Exception e) {
+        if (e instanceof LlmClient.LlmHttpException llmHttpException) {
+            return llmHttpException.retryable();
+        }
+        String message = e.getMessage() == null ? "" : e.getMessage().toLowerCase();
+        if (message.contains("llm api key is empty")
+                || message.contains("api_key_invalid")
+                || message.contains("api key not valid")
+                || message.contains("invalid api key")) {
+            return false;
+        }
+        return true;
     }
 
     private void processJob(LeadProcessingJob job) {
@@ -140,27 +166,22 @@ public class LeadProcessingWorker {
         while (matcher.find()) {
             String fieldId = matcher.group(1);
             String replacement = formatLeadValue(lead.get(fieldId));
+            log.info("Prompt field injected: fieldId={}, valuePresent={}", fieldId, replacement != null && !replacement.isBlank());
             matcher.appendReplacement(result, Matcher.quoteReplacement(replacement));
         }
         matcher.appendTail(result);
 
-        return result + "\n\n---\nПолный JSON лида из Bitrix24:\n" + toPrettyJson(lead);
+        // ВАЖНО: не добавляем сюда полный JSON лида и не добавляем никакие скрытые поля.
+        // В LLM уходит только текст шаблона и только те Bitrix-поля, которые пользователь явно вставил в шаблон через {{FIELD_ID}}.
+        return result.toString();
     }
 
     private String defaultPromptTemplate() {
         return """
                 Собери краткую справку по лиду для менеджера.
 
-                Название лида: {{TITLE}}
-                Компания: {{COMPANY_TITLE}}
-                Имя: {{NAME}}
-                Фамилия: {{LAST_NAME}}
-                Телефон: {{PHONE}}
-                Email: {{EMAIL}}
-                Сайт: {{WEB}}
-                Комментарий: {{COMMENTS}}
-
-                Нужно структурировать: кто это, чем может заниматься компания, что важно проверить перед звонком, какие вопросы задать первым сообщением.
+                Вставь в этот шаблон только те поля лида, которые действительно нужно отправить в LLM.
+                Приложение не добавляет полный JSON лида автоматически.
                 """;
     }
 
