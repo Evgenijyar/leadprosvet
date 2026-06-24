@@ -29,13 +29,14 @@ public class BitrixInstallService {
         BitrixPortal portal = findExisting(domain, memberId);
         OffsetDateTime now = OffsetDateTime.now();
 
-        portal.setDomain(normalizeDomain(domain));
-        portal.setMemberId(memberId);
-        portal.setClientEndpoint(payloadParser.getAny(data, "client_endpoint", "CLIENT_ENDPOINT", "auth[client_endpoint]"));
-        portal.setServerEndpoint(payloadParser.getAny(data, "server_endpoint", "SERVER_ENDPOINT", "auth[server_endpoint]"));
-        portal.setAccessToken(payloadParser.getAny(data, "access_token", "AUTH_ID", "auth[access_token]", "auth[AUTH_ID]"));
-        portal.setRefreshToken(payloadParser.getAny(data, "refresh_token", "REFRESH_ID", "auth[refresh_token]", "auth[REFRESH_ID]"));
-        portal.setApplicationToken(payloadParser.getAny(data, "application_token", "APP_SID", "auth[application_token]", "auth[APP_SID]"));
+        setIfNotBlank(portal::setDomain, normalizeDomain(domain));
+        setIfNotBlank(portal::setMemberId, memberId);
+        setIfNotBlank(portal::setClientEndpoint, payloadParser.getAny(data, "client_endpoint", "CLIENT_ENDPOINT", "auth[client_endpoint]"));
+        setIfNotBlank(portal::setServerEndpoint, payloadParser.getAny(data, "server_endpoint", "SERVER_ENDPOINT", "auth[server_endpoint]"));
+        setIfNotBlank(portal::setAccessToken, payloadParser.getAny(data, "access_token", "AUTH_ID", "auth[access_token]", "auth[AUTH_ID]"));
+        setIfNotBlank(portal::setRefreshToken, payloadParser.getAny(data, "refresh_token", "REFRESH_ID", "auth[refresh_token]", "auth[REFRESH_ID]"));
+        setIfNotBlank(portal::setApplicationToken, payloadParser.getAny(data, "application_token", "APP_SID", "auth[application_token]", "auth[APP_SID]"));
+
         portal.setInstalled(true);
         if (portal.getInstalledAt() == null) {
             portal.setInstalledAt(now);
@@ -53,6 +54,12 @@ public class BitrixInstallService {
             return bitrixPortalRepository.findByDomain(normalizedDomain).orElseGet(BitrixPortal::new);
         }
         return new BitrixPortal();
+    }
+
+    private void setIfNotBlank(java.util.function.Consumer<String> setter, String value) {
+        if (value != null && !value.isBlank()) {
+            setter.accept(value.trim());
+        }
     }
 
     private String normalizeDomain(String raw) {
